@@ -85,10 +85,21 @@ money. Fill the `CHANGE-ME` placeholders in `matrix.yaml` first.
 
 **Phase 0 — prep** (nothing runs on a cell until this is done):
 
-1. Fill `matrix.yaml`: `s3_bucket`, `region`, the five `images:` URIs, and
-   `amortized_hr` for any local arms (write the assumption down).
-2. Build and push the five images from `build/`. `mdrun_wrapper.sh` must land at
-   `/opt/bench/mdrun_wrapper.sh` inside each.
+1. Set the account/region env vars `matrix.yaml` expands (kept out of the repo
+   so it stays account-agnostic), and `amortized_hr` for any local arms:
+
+   ```bash
+   export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+   export AWS_REGION=us-east-1
+   ```
+
+   The bucket (`aws-gromacs-bench-$AWS_ACCOUNT`) and ECR image URIs derive from
+   these. `DRY_RUN` runs need nothing set.
+2. Build and push the five images from `build/` to ECR (see
+   [`docs/gromacs-delivery.md`](docs/gromacs-delivery.md)). Delivery is
+   container-on-boot: `spawn` launches a bare AL2023 instance and `docker run`s
+   the arch-appropriate tag; `mdrun_wrapper.sh` is baked into each image at
+   `/opt/bench/`.
 3. Stage `.tpr` files to `s3://<bucket>/gromacs-bench/tpr/` — two per workload,
    base plus an HMR variant (`<system>-hmr.tpr`, repartitioned masses, 4 fs
    `dt`). **Nothing here generates these** — build them with `grompp`.

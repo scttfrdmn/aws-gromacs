@@ -61,32 +61,44 @@ def truffle_price(instance_type: str, region: str) -> Prices:
     return Prices(on_demand_hr=on_demand, spot_hr=spot)
 
 
-COMPLETION_FILE = "/tmp/SPAWN_COMPLETE"
+# GROMACS is delivered as a container (docs/gromacs-delivery.md): spawn launches
+# a bare AL2023 instance (auto-detected AMI, GPU variants already carry NVIDIA
+# drivers), then we docker-pull + docker-run the arch-appropriate image. The work
+# dir is bind-mounted host<->container so logs and the completion sentinel land
+# where spawn (host) and fetch() can see them.
+HOST_WORK = "/tmp/bench"
+CTR_WORK = "/work"
+COMPLETION_FILE = f"{HOST_WORK}/SPAWN_COMPLETE"   # host path spawn watches
 
 
-def spawn(instance_type: str, image: str, ttl_minutes: int, idle_minutes: int,
+def _registry(image: str) -> str:
+    """ECR registry host from an image URI (everything before the first '/')."""
+    return image.split("/", 1)[0]
+
+
+def spawn(instance_type: str, ttl_minutes: int, idle_minutes: int,
           region: str, name: str, on_complete: str = "terminate",
-          pre_stop: str | None = None) -> str:
-    """Launch an on-demand instance with auto-termination. Returns the name,
-    which is the handle spawn uses for connect/terminate.
+          pre_stop: str | None = None, ami: str | None = None) -> str:
+    """Launch a bare on-demand instance with auto-termination. Returns the name,
+    which is the handle spawn uses for connect/terminate. GROMACS itself arrives
+    later via pull()/run_container(); nothing GROMACS-specific is baked here.
 
     Three independent teardown guarantees, so no run can strand a billing
     instance:
       * `--ttl`           hard upper bound on lifetime
       * `--idle-timeout`  reap if nothing is running
-      * completion file   mdrun_wrapper.sh writes /tmp/SPAWN_COMPLETE when the
-                          replicates finish; spawn then runs `--on-complete`
-                          (default `terminate` -- bounded cost; `stop` keeps
-                          billing EBS, per spawn's own warning).
+      * completion file   mdrun_wrapper.sh (in the container) writes the sentinel
+                          to the bind-mounted host path when replicates finish;
+                          spawn then runs `--on-complete` (default `terminate` --
+                          bounded cost; `stop` keeps billing EBS, per spawn).
     `--terminate-on-error` also reaps the instance if spored never comes up.
     Optional `--pre-stop` runs on the box before teardown (e.g. an
-    `aws s3 sync` of results), which is the robust alternative to fetch().
+    `aws s3 sync` of results), the robust alternative/backstop to fetch().
 
-    `image` is an AMI id (ami-...) or 'auto'; timing runs are on-demand (no
-    --spot) on purpose. Syntax verified via `spawn launch --help`.
+    AMI is auto-detected (omit `--ami`); pass `ami` only to pin one. Timing runs
+    are on-demand (no --spot) on purpose. Syntax verified via `spawn launch
+    --help`.
     # SPORE: not yet confirmed end-to-end against a live launch (would spend).
-    Delivering GROMACS is a Phase-0 decision (custom AMI vs. --command container
-    pull); `image` maps to --ami here -- see issue #2 / matrix.yaml `images:`.
     """
     cmd = ["spawn", "launch", name,
            "--instance-type", instance_type,
@@ -98,13 +110,51 @@ def spawn(instance_type: str, image: str, ttl_minutes: int, idle_minutes: int,
            "--terminate-on-error",
            "--wait-for-ssh",
            "-o", "json"]
-    if image and image != "auto":
-        cmd += ["--ami", image]
+    if ami:
+        cmd += ["--ami", ami]
     if pre_stop:
         cmd += ["--pre-stop", pre_stop]
     _run(cmd)
     # Addressed by name from here on; no id parsing needed.
     return name
+
+
+def pull(handle: str, image: str, region: str) -> None:
+    """ECR-login and docker-pull the image on the instance. This is the
+    provisioning step -- its wall-clock belongs in `provision_s` (boot + pull +
+    stage), NOT `runtime_s`, so the timing split stays honest. Separated from
+    run_container() precisely so the caller can time it on the provision side.
+    # SPORE: docker/ECR presence on the auto AL2023 AMI unconfirmed until Phase 1.
+    """
+    reg = _registry(image)
+    login = (f"aws ecr get-login-password --region {shlex.quote(region)} "
+             f"| docker login --username AWS --password-stdin {shlex.quote(reg)}")
+    run_remote(handle, f"{login} && docker pull {shlex.quote(image)}")
+
+
+def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> str:
+    """docker-run the benchmark image; the entrypoint is mdrun_wrapper.sh. This
+    is the timed workload -- its wall-clock is `runtime_s`. The host work dir is
+    bind-mounted so md*.log and the completion sentinel are visible to spawn's
+    completion watcher and to fetch(). ns/day itself comes from GROMACS's own
+    -resethway steady-state timers in the logs, not this wall-clock, so pull/boot
+    overhead never contaminates the performance number.
+    # SPORE: --gpus all on the auto GPU AMI (nvidia container toolkit) unconfirmed
+    until Phase 1.
+    """
+    # WORK: container-side work dir. COMPLETION_FILE: point the wrapper's sentinel
+    # at the bind-mounted dir so it appears on the host at COMPLETION_FILE (which
+    # is what spawn --completion-file watches).
+    ctr_env = {**env, "WORK": CTR_WORK,
+               "COMPLETION_FILE": f"{CTR_WORK}/SPAWN_COMPLETE"}
+    docker_env = " ".join(f"-e {k}={shlex.quote(v)}" for k, v in ctr_env.items())
+    gpu_flag = "--gpus all " if gpu else ""
+    # --privileged: MIG/MPS setup in the wrapper needs nvidia-smi -mig / control.
+    priv = "--privileged " if gpu else ""
+    cmd = (f"mkdir -p {HOST_WORK} && docker run --rm {gpu_flag}{priv}"
+           f"-v {HOST_WORK}:{CTR_WORK} {docker_env} {shlex.quote(image)} "
+           f"bash /opt/bench/mdrun_wrapper.sh")
+    return run_remote(handle, cmd)
 
 
 def run_remote(handle: str, command: str, env: dict[str, str] | None = None) -> str:

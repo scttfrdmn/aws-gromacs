@@ -20,6 +20,7 @@ import argparse
 import csv
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -115,6 +116,28 @@ def env_for(cfg: dict, wl: dict, cf: dict, local: bool) -> dict[str, str]:
     }
 
 
+def _expand_env(obj):
+    """Expand ${VAR} in every string in the loaded config, so account- and
+    region-specific values (bucket, ECR URIs) stay out of the committed file --
+    the repo is public and account-agnostic. Unset vars raise, rather than
+    silently leaving a literal ${...} that would fail obscurely at launch.
+    DRY_RUN skips the check so `--list`/dry sweeps work with nothing exported."""
+    if isinstance(obj, dict):
+        return {k: _expand_env(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_expand_env(v) for v in obj]
+    if isinstance(obj, str):
+        if spore.DRY_RUN:
+            # Leave placeholders visible in dry-run output; don't require env.
+            return os.path.expandvars(obj)
+        missing = [m for m in re.findall(r"\$\{(\w+)\}", obj) if m not in os.environ]
+        if missing:
+            raise SystemExit(f"config references unset env var(s): {', '.join(missing)}"
+                             f" (in {obj!r})")
+        return os.path.expandvars(obj)
+    return obj
+
+
 def ns_per_dollar(ns_day: float, price_hr: float) -> float:
     return ns_day / (price_hr * 24.0) if price_hr > 0 else 0.0
 
@@ -146,27 +169,30 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
         prices = spore.truffle_price(inst["type"], cfg["region"])
         od, spot = prices.on_demand_hr, prices.spot_hr
         max_wait = float(cfg.get("capacity_max_wait_minutes", 30)) * 60
+        image = cfg["images"][inst["arch"]]
+        gpu = inst["class"] == "gpu"
         if cfg.get("use_lagotto", True):
             # Watch for capacity rather than discovering it by failing.
             handle, acquire_s, seen_s = providers.lagotto_acquire(
                 inst["type"], cfg["region"], max_wait,
-                cfg["images"][inst["arch"]], cfg["ttl_minutes"],
-                cfg["idle_minutes"], name)
+                cfg["ttl_minutes"], cfg["idle_minutes"], name)
             method = "lagotto"
         else:
             handle, acquire_s = providers.cloud_acquire(
-                lambda: spore.spawn(inst["type"], cfg["images"][inst["arch"]],
-                                    cfg["ttl_minutes"], cfg["idle_minutes"],
-                                    cfg["region"], name),
+                lambda: spore.spawn(inst["type"], cfg["ttl_minutes"],
+                                    cfg["idle_minutes"], cfg["region"], name),
                 max_wait_s=max_wait)
             seen_s, method = acquire_s, "retry"
         granted = time.time()
         try:
-            spore.run_remote(handle, "mkdir -p /tmp/bench")   # marks ready
+            # provision = boot + ECR login + image pull + stage. Timed as
+            # provision_s, kept out of runtime_s so the split stays honest.
+            spore.pull(handle, image, cfg["region"])
             ready = time.time()
-            spore.run_remote(handle, "bash /opt/bench/mdrun_wrapper.sh", env=env)
+            # runtime = the docker run of the wrapper (the timed GROMACS work).
+            spore.run_container(handle, image, env, gpu)
             done = time.time()
-            spore.fetch(handle, "/tmp/bench/logs/md*.log",
+            spore.fetch(handle, f"{spore.HOST_WORK}/logs/md*.log",
                         str(cell_dir / "logs") + "/")
         finally:
             spore.terminate(handle)
@@ -235,7 +261,7 @@ def main() -> int:
         os.environ["DRY_RUN"] = "1"
         spore.DRY_RUN = True
 
-    cfg = yaml.safe_load(open(args.config))
+    cfg = _expand_env(yaml.safe_load(open(args.config)))
     RESULTS.mkdir(exist_ok=True)
 
     if args.phase1:
@@ -272,7 +298,7 @@ def main() -> int:
                 queue_samples[inst["id"]] = providers.cloud_probe_capacity(
                     inst["type"], cfg["region"], n, max_wait,
                     lambda i=inst: (lambda: spore.spawn(
-                        i["type"], cfg["images"][i["arch"]], cfg["ttl_minutes"],
+                        i["type"], cfg["ttl_minutes"],
                         cfg["idle_minutes"], cfg["region"], f"probe-{i['id']}")))
 
     rows = []

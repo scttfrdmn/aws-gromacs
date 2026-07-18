@@ -3,8 +3,13 @@
 # one way to run this" axis: timestep/HMR, force placement, MIG carve.
 # Fill in bucket + image URIs before running.
 
-s3_bucket: CHANGE-ME-bucket          # -> s3://<bucket>/gromacs-bench/tpr/*.tpr
-region: us-east-1
+# Account/region come from the environment so nothing account-specific is
+# committed to this public repo. Export before a live run, e.g.:
+#   export AWS_ACCOUNT=$(aws sts get-caller-identity --query Account --output text)
+#   export AWS_REGION=us-east-1
+# (DRY_RUN skips the requirement, so --list / dry sweeps need nothing set.)
+s3_bucket: aws-gromacs-bench-${AWS_ACCOUNT}   # -> s3://<bucket>/gromacs-bench/tpr/*.tpr
+region: ${AWS_REGION}                         # ECR/truffle/spawn all use this region
 nsteps: 20000                        # timed run length; -resethway halves it
 ttl_minutes: 120
 idle_minutes: 15
@@ -26,12 +31,18 @@ capacity_max_wait_minutes: 30
 # false falls back to the retry/backoff loop.
 use_lagotto: true
 
+# ECR image URIs (docs/gromacs-delivery.md). One repo, five tags; spawn launches
+# a bare AL2023 instance and docker-runs the arch-appropriate tag on boot. Push
+# these before any live run (issue #2). Registry = <acct>.dkr.ecr.<region>...
 images:
-  x86:       CHANGE-ME/gromacs:x86-avx512      # Intel, AVX-512
-  amd:       CHANGE-ME/gromacs:amd-avx512      # Zen 5, full-width AVX-512
-  amd_avx2:  CHANGE-ME/gromacs:amd-avx2        # Zen 5, AVX2_256 comparison arm
-  arm:       CHANGE-ME/gromacs:arm-sve         # Graviton4, SVE2
-  cuda:      CHANGE-ME/gromacs:cuda
+  # Registry is ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com, filled from
+  # the env (see above). Tags: Intel AVX-512 / Zen5 AVX-512 / Zen5 AVX2_256 /
+  # Graviton4 SVE2 / GPU CUDA.
+  x86: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:x86-avx512
+  amd: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx512
+  amd_avx2: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx2
+  arm: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:arm-sve
+  cuda: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:cuda
 
 workloads:
   - id: small
