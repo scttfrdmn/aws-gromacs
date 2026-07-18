@@ -29,14 +29,18 @@ your desk, sometimes toward an `.mdp` edit.
 ## Status
 
 Nothing here has been executed against live infrastructure. Every file is
-syntax-validated; behavior is not. Two categories of assumption must be
-confirmed before a live run:
+syntax-validated; behavior is not. Assumptions still to confirm before a live
+run:
 
-1. **All `# SPORE:` marked CLI invocations are guessed syntax** (`spore.py`,
-   `providers.py`). Confirm against the installed `truffle` / `spawn` /
-   `lagotto` before spending money.
+1. **`# SPORE:` markers** (`spore.py`, `providers.py`). CLI *syntax* is now
+   verified against the installed `truffle` / `spawn` / `lagotto` (2026-07-18),
+   and truffle pricing + the lagotto `history` schema against live output. What
+   the markers now flag is *end-to-end behavior* that can only be confirmed by a
+   run that spends money — launch/connect/teardown, env propagation, and the
+   lagotto watch→poll→match flow. The Phase-1 cell exercises these first.
 2. **`providers._epoch()`** assumes `sacct` emits `%Y-%m-%dT%H:%M:%S` in local
-   time. Verify per site, or every on-prem wait number is wrong.
+   time. Verify per site, or every on-prem wait number is wrong. (Lagotto
+   timestamps are UTC ISO-8601 and use `_epoch_utc()` — keep them distinct.)
 
 Work is tracked in [issues](https://github.com/scttfrdmn/aws-gromacs/issues) and
 on the [project board](https://github.com/users/scttfrdmn/projects/58),

@@ -11,26 +11,41 @@ capacity appeared) are different quantities under contention. Without the split,
 `capacity_seen_s` collapses to `acquire_s` and we lose the appeared-vs-granted
 distinction — the thing that makes cloud `acquire_s` legitimately comparable to
 `sacct` Submit→Start.
-*Wanted:* JSON field for the fire moment, and for the interval between fire and
-running.
+*Verified 2026-07-18:* `lagotto history` provides `matched_at` (capacity
+appeared) but **no** running/granted timestamp, so under `--action spawn` the
+split is lost exactly as feared. The harness works around it with `--action
+hold` + its own launch wall-clock. *Wanted:* a `running_at` / fire→running
+interval in the `--action spawn` record.
 
-**G2. Watch-only mode that never launches.**
-Sampling a time-to-capacity distribution should cost nothing. If `--json`
-without `--launch` isn't supported, every distribution sample becomes a real
-launch and `wait_samples: 10` on g7e gets expensive.
+**G2. Watch-only mode that never launches.** — *RESOLVED (verified 2026-07-18).*
+`lagotto watch <type> --action notify` records availability without launching,
+and `--action hold` records without acting at all, so sampling a time-to-capacity
+distribution costs nothing. The original premise (a blocking `watch --launch`)
+was wrong; the tool is async (register a watch, a poller acts on it).
 
 **G3. Report whether the watch expired vs. errored.**
 Currently any nonzero exit is treated as `infeasible:capacity`. A malformed
 request and a genuinely exhausted pool are different findings and shouldn't
 share an outcome class.
 
-**G4. Per-AZ / per-pool granularity in the watch result.**
-Which AZ the capacity appeared in is the input to heterogeneous placement (D11).
-Aggregated region-level results can't drive that.
+**G4. Per-AZ / per-pool granularity in the watch result.** — *PARTLY RESOLVED.*
+The `lagotto history` record carries `availability_zone` and `candidate_azs`
+(verified 2026-07-18), which drives heterogeneous placement (D11). Still open:
+per-pool depth, not just which AZ won a single match.
 
-**G5. Historical time-to-capacity, not just live watching.**
-Building a distribution live takes as long as the distribution is wide. If
-lagotto retains observations, `wait_samples` could be answered from history.
+**G5. Historical time-to-capacity, not just live watching.** — *RESOLVED.*
+`lagotto history [--watch-id <id>] -o json` returns retained match records with
+`matched_at`, so `wait_samples` can be answered from history rather than only by
+watching live. (Schema is undocumented — see G10.)
+
+**G10. Document the history/status JSON schema.**
+`lagotto history`/`status -o json` are the harness's only programmatic view of
+whether/when a watch fired, but the record schema is documented nowhere. Field
+names (`matched_at`, `availability_zone`, `watch_id`, `action_taken`) were
+reverse-engineered from live output on 2026-07-18. If the schema drifts, parsing
+breaks silently or a sample is dropped to the `max_wait_s` ceiling — biasing the
+wait distribution with no error. *Wanted:* a documented, versioned schema.
+Filed upstream-candidate; tracked as issue #39.
 
 ## truffle
 

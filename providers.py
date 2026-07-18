@@ -31,6 +31,7 @@ import statistics
 import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 
@@ -129,6 +130,14 @@ def _epoch(ts: str) -> float:
     return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%S"))
 
 
+def _epoch_utc(ts: str) -> float:
+    """Parse a lagotto ISO-8601 UTC timestamp (`...Z` or `+00:00`) to an epoch.
+    Distinct from _epoch(): sacct emits naive local-time stamps, lagotto emits
+    zoned UTC. Feeding one to the other's parser raises or is silently wrong."""
+    return (datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            .astimezone(UTC).timestamp())
+
+
 def onprem_probe_queue(inst: dict, n: int | None = None) -> list[float]:
     """Submit n trivial jobs to the same partition to sample the wait
     distribution independently of the benchmark runs. Report best case AND
@@ -224,76 +233,147 @@ def cloud_probe_capacity(instance_type: str, region: str, n: int,
 # --------------------------------------------------------------------------
 # lagotto: watch for capacity instead of discovering it by failing
 # --------------------------------------------------------------------------
-# The retry loop below measures capacity wait by failing repeatedly: backoff
+# The retry loop above measures capacity wait by failing repeatedly: backoff
 # granularity blurs the timestamp and every probe is a real launch attempt.
-# lagotto watches the pool and fires when capacity appears, so acquire_s is
+# lagotto watches the pool and records when capacity APPEARED, so acquire_s is
 # directly observed and sampling a distribution costs nothing.
 #
-# Boundary that must be preserved: lagotto reports when capacity APPEARED, not
-# when our request was GRANTED. Under contention these differ. Keep acquire_s as
-# watch-start -> instance-running so it stays comparable to sacct Submit->Start,
-# and record the fire time separately as capacity_seen_s.
+# Command syntax verified 2026-07-18 via `lagotto {watch,poll,status,history}
+# --help`. The real tool is ASYNC and DynamoDB-backed, NOT the blocking
+# `watch --launch` the first draft assumed:
+#   * `lagotto watch <pattern> --action {notify,spawn,hold} [--spot] --ttl ...`
+#     registers a watch and returns its id. --action spawn needs a spawn
+#     LaunchConfig YAML (--spawn-config); there is no --launch/--image/--max-wait.
+#   * A poller acts on watches: `lagotto poll --daemon --interval` locally, or a
+#     Lambda schedule in production. `lagotto watch` auto-creates the tables.
+#   * `lagotto history --watch-id <id> -o json` records matches with timestamps;
+#     `lagotto status <id>` shows current state.
+#
+# Boundary that must be preserved (this is exactly GAP G1): lagotto reports when
+# capacity APPEARED, not when our request was GRANTED. Keep acquire_s as
+# watch-start -> instance-running (comparable to sacct Submit->Start) and record
+# the fire time separately as capacity_seen_s from the history record.
+#
+# Command lines AND the `history` record schema are verified against live output
+# (2026-07-18): matches carry `watch_id`, `matched_at` (ISO-8601 UTC), and
+# `availability_zone`. What remains unverified until a live capacity event is the
+# END-TO-END flow: that `--action hold` + our own `poll --mine --watch` actually
+# produces a match record we can then launch against. Watch id is parsed from
+# `watch` JSON, whose shape was not directly observed (empty account).
+# SPORE: end-to-end flow unconfirmed. `watch` id field (`watch_id`/`id`) assumed;
+# lookups are defensive so a shape mismatch degrades rather than crashes. Until
+# Phase 1 exercises this, `use_lagotto: false` uses the fully verified retry path.
+# Schema-drift risk tracked as G10 (#39).
+
+_LAGOTTO_POLL_S = 15
+
+
+def _lagotto_watch_id(instance_type: str, region: str, spot: bool,
+                      ttl_minutes: int, extra: list[str]) -> str:
+    cmd = ["lagotto", "watch", instance_type, "--regions", region,
+           "--ttl", f"{ttl_minutes}m", "-o", "json", *extra]
+    if spot:
+        cmd.append("--spot")
+    out = _sh(cmd)
+    if DRY_RUN:
+        return "dry-watch"
+    d = json.loads(out)
+    wid = d.get("watch_id") or d.get("id")
+    if not wid:
+        raise CapacityUnavailable(f"lagotto watch did not return an id: {out[:160]}")
+    return wid
+
+
+def _lagotto_fired(watch_id: str) -> dict | None:
+    """Return the earliest match record for a watch, or None if it hasn't fired.
+
+    Verified against live `lagotto history -o json` (2026-07-18): each record has
+    `watch_id`, `matched_at` (ISO-8601 UTC, e.g. 2026-06-28T10:19:32.869772Z),
+    `availability_zone` (answers GAP G4), `instance_type`, `price`, `is_spot`,
+    and `action_taken` in {spawned, spawn_failed}. A record means capacity
+    APPEARED regardless of action_taken -- which is what we want, since with
+    --action hold we do the launch ourselves. Sort by matched_at so we take the
+    first appearance, not whatever order the API returns.
+    """
+    out = _sh(["lagotto", "history", "--watch-id", watch_id, "-o", "json"])
+    rows = json.loads(out) if out else []
+    if not rows:
+        return None
+    return min(rows, key=lambda r: r.get("matched_at", ""))
+
 
 def lagotto_acquire(instance_type: str, region: str, max_wait_s: float,
                     image: str, ttl_minutes: int, idle_minutes: int,
                     name: str) -> tuple[str, float, float]:
-    """Watch a pool and launch when capacity appears.
+    """Register a watch, drive the poller, and launch when capacity appears.
 
     Returns (handle, acquire_s, capacity_seen_s).
     Raises CapacityUnavailable if the watch never fires inside the window.
+
+    SPORE: end-to-end unverified (needs the DynamoDB backend + a real capacity
+    event). Uses --action hold so we control the launch (via spore.spawn) and
+    keep acquire_s = watch-start -> instance-running.
     """
     t0 = time.time()
-    # SPORE: confirm real lagotto syntax. Assumed: blocks until capacity, then
-    # launches, emitting JSON with a handle and the moment capacity was seen.
-    cmd = ["lagotto", "watch",
-           "--type", instance_type,
-           "--region", region,
-           "--max-wait", f"{int(max_wait_s)}s",
-           "--launch",
-           "--image", image,
-           "--ttl", f"{ttl_minutes}m",
-           "--idle", f"{idle_minutes}m",
-           "--name", name,
-           "--json"]
     if DRY_RUN:
-        print(f"[dry-run] {' '.join(shlex.quote(c) for c in cmd)}")
+        print(f"[dry-run] lagotto watch {instance_type} --regions {region} "
+              f"--action hold --ttl {ttl_minutes}m -o json  (+ poll/history)")
         return f"dry-{name}", 0.0, 0.0
 
-    try:
-        out = _sh(cmd)
-    except subprocess.CalledProcessError as e:
-        raise CapacityUnavailable(
-            f"lagotto watch failed for {instance_type} in {region}: "
-            f"{(e.stderr or '')[:160]}") from e
+    watch_id = _lagotto_watch_id(instance_type, region, spot=False,
+                                 ttl_minutes=ttl_minutes, extra=["--action", "hold"])
+    match = None
+    while match is None:
+        if time.time() - t0 >= max_wait_s:
+            _sh(["lagotto", "cancel", watch_id])
+            raise CapacityUnavailable(
+                f"no capacity for {instance_type} in {region} within {max_wait_s:.0f}s")
+        _sh(["lagotto", "poll", "--mine", "--watch", watch_id])
+        match = _lagotto_fired(watch_id)
+        if match is None:
+            time.sleep(_LAGOTTO_POLL_S)
 
-    d = json.loads(out)
-    if not d.get("handle"):
-        raise CapacityUnavailable(
-            f"no capacity for {instance_type} in {region} within {max_wait_s:.0f}s")
-
+    # Capacity appeared. Record the fire moment (G1), then launch ourselves.
+    seen_at = match["matched_at"]  # verified field (lagotto history)
+    capacity_seen_s = (_epoch_utc(seen_at) - t0 if seen_at else time.time() - t0)
+    from spore import spawn as _spawn
+    handle = _spawn(instance_type, image, ttl_minutes, idle_minutes, region, name)
     acquire_s = time.time() - t0
-    # GAP: if lagotto does not emit the fire timestamp, capacity_seen_s collapses
-    # to acquire_s and the appeared-vs-granted split is lost. See GAPS.md.
-    seen = float(d.get("capacity_seen_s", d.get("waited_s", acquire_s)))
-    return d["handle"], acquire_s, seen
+    return handle, acquire_s, capacity_seen_s
 
 
 def lagotto_probe(instance_type: str, region: str, n: int,
                   max_wait_s: float) -> list[float]:
-    """Sample time-to-capacity by watching only -- no launches, so building a
-    distribution is free. Non-firing watches record at the ceiling rather than
-    being dropped, so the distribution is not biased toward lucky draws."""
+    """Sample time-to-capacity by watching only (--action notify, no launch), so
+    building a distribution is free. Non-firing watches record at the ceiling
+    rather than being dropped, so the distribution is not biased toward lucky
+    draws.
+
+    SPORE: end-to-end unverified; same backend dependency as lagotto_acquire.
+    """
     samples: list[float] = []
     for _ in range(n):
-        cmd = ["lagotto", "watch", "--type", instance_type, "--region", region,
-               "--max-wait", f"{int(max_wait_s)}s", "--json"]
         if DRY_RUN:
-            print(f"[dry-run] {' '.join(shlex.quote(c) for c in cmd)}")
+            print(f"[dry-run] lagotto watch {instance_type} --regions {region} "
+                  f"--action notify -o json  (+ poll/history)")
             continue
         t0 = time.time()
         try:
-            d = json.loads(_sh(cmd))
-            samples.append(float(d.get("capacity_seen_s", time.time() - t0)))
+            wid = _lagotto_watch_id(instance_type, region, spot=True,
+                                    ttl_minutes=max(1, int(max_wait_s // 60)),
+                                    extra=["--action", "notify"])
+            match = None
+            while match is None and time.time() - t0 < max_wait_s:
+                _sh(["lagotto", "poll", "--mine", "--watch", wid])
+                match = _lagotto_fired(wid)
+                if match is None:
+                    time.sleep(_LAGOTTO_POLL_S)
+            if match is None:
+                _sh(["lagotto", "cancel", wid])
+                samples.append(max_wait_s)
+            else:
+                seen_at = match["matched_at"]  # verified field (lagotto history)
+                samples.append(_epoch_utc(seen_at) - t0 if seen_at else time.time() - t0)
         except Exception:
             samples.append(max_wait_s)
     return samples

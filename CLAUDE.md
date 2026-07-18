@@ -18,12 +18,16 @@ value — adaptive sampling is not slow under a fixed allocation, it is
 unexpressible.
 
 ## Before doing anything
-- Nothing here has been run. Syntax is validated; behavior is not.
-- Every `# SPORE:` comment marks **guessed CLI syntax** for truffle/spawn/lagotto.
-  Confirm each against the installed tools before any live run. Fix them in
-  `spore.py` and `providers.py` and remove the marker once verified.
+- Nothing here has been run against live infra. Syntax is validated; behavior is not.
+- `# SPORE:` markers: CLI **syntax is verified** (truffle/spawn/lagotto, 2026-07-18),
+  as are truffle pricing + the lagotto `history` schema. The markers now flag
+  **end-to-end behavior** unconfirmed until a paid run (launch/connect/teardown,
+  env propagation, lagotto watch→poll→match). Remove a marker only once its flow
+  is exercised live. Prefer `use_lagotto: false` until Phase 1 (retry path fully
+  verified).
 - `providers._epoch()` assumes `sacct` timestamps are `%Y-%m-%dT%H:%M:%S` local.
-  Verify per site.
+  Lagotto uses UTC ISO-8601 via `_epoch_utc()` — do not merge the two.
+- Verify `_epoch()` per site.
 
 ## Invariants — do not break these
 - **`DRY_RUN=1 python run_matrix.py` after every edit to `run_matrix.py`.**

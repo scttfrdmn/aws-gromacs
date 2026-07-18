@@ -12,6 +12,12 @@
 #   REPLICATES   N timed runs (default 3). ns/day is noisy; one run is not a
 #                measurement. parse_log.py turns the replicates into mean +/- CI.
 #   GMX          gmx binary (default: gmx)
+#   COMPLETION_FILE  sentinel to touch when all replicates finish; spawn watches
+#                    it and runs --on-complete (terminate/stop). Default matches
+#                    spawn's default so cost is bounded even if unset. Only
+#                    written on SUCCESS -- a failed run leaves no sentinel, so
+#                    the instance falls through to idle/TTL teardown instead of
+#                    being reaped as if it had produced results.
 #
 # Every log is named md_rep<r>_*.log so parse_log.py can separate the
 # across-replicate distribution from the within-replicate slice sum.
@@ -19,6 +25,7 @@ set -euo pipefail
 
 GMX="${GMX:-gmx}"
 WORK="${WORK:-/tmp/bench}"
+COMPLETION_FILE="${COMPLETION_FILE:-/tmp/SPAWN_COMPLETE}"
 MIG_SLICES="${MIG_SLICES:-0}"
 MPS_PROCS="${MPS_PROCS:-0}"
 REPLICATES="${REPLICATES:-3}"
@@ -91,3 +98,8 @@ fi
 # Collect logs to a flat location for retrieval.
 mkdir -p "$WORK/logs"
 find "$WORK" -name 'md*.log' -not -path "$WORK/logs/*" -exec cp {} "$WORK/logs/" \;
+
+# Signal completion so spawn tears the instance down (--on-complete). Written
+# last, only on the success path -- `set -e` above aborts before here on any
+# mdrun failure, leaving no sentinel so the box is not reaped as "done".
+touch "$COMPLETION_FILE"
