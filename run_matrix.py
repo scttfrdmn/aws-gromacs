@@ -274,6 +274,14 @@ def main() -> int:
                     help="config-axis sweep only (D1/D2/D3/D13)")
     ap.add_argument("--phase1", action="store_true",
                     help="single validation cell: small / c8g / cpu-base")
+    ap.add_argument("--workloads", default="",
+                    help="comma list of workload ids to include (default: all)")
+    ap.add_argument("--instances", default="",
+                    help="comma list of instance ids to include (default: all)")
+    ap.add_argument("--configs", default="",
+                    help="comma list of config ids to include (default: all)")
+    ap.add_argument("--exclude-configs", default="",
+                    help="comma list of config ids to exclude (e.g. hmr when no -hmr tpr is staged)")
     args = ap.parse_args()
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
@@ -289,6 +297,32 @@ def main() -> int:
         cells = [(wl, inst, cf)]
     else:
         cells = build_cells(cfg, tier1=args.tier1)
+        # Optional subset filters -- run a real campaign over part of the matrix
+        # (e.g. only the workloads/instances whose inputs are staged) without
+        # faking rows for the rest. Additive: they only narrow build_cells().
+        # An unknown id is a typo guard -- fail before spending, not silently.
+        def _subset(flag: str, ids: set[str], kind: str) -> set[str] | None:
+            if not flag:
+                return None
+            want = {s.strip() for s in flag.split(",") if s.strip()}
+            unknown = want - ids
+            if unknown:
+                raise SystemExit(f"--{kind}: unknown id(s) {sorted(unknown)}; "
+                                 f"known: {sorted(ids)}")
+            return want
+        cfg_ids_all = {c["id"] for c in cfg["configs"]}
+        wl_ids = _subset(args.workloads, {w["id"] for w in cfg["workloads"]}, "workloads")
+        in_ids = _subset(args.instances, {i["id"] for i in cfg["instances"]}, "instances")
+        cf_ids = _subset(args.configs, cfg_ids_all, "configs")
+        cf_excl = _subset(args.exclude_configs, cfg_ids_all, "exclude-configs")
+        if wl_ids is not None:
+            cells = [(w, i, c) for (w, i, c) in cells if w["id"] in wl_ids]
+        if in_ids is not None:
+            cells = [(w, i, c) for (w, i, c) in cells if i["id"] in in_ids]
+        if cf_ids is not None:
+            cells = [(w, i, c) for (w, i, c) in cells if c["id"] in cf_ids]
+        if cf_excl is not None:
+            cells = [(w, i, c) for (w, i, c) in cells if c["id"] not in cf_excl]
 
     if args.list:
         for wl, inst, cf in cells:
