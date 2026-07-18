@@ -98,8 +98,8 @@ money. Fill the `CHANGE-ME` placeholders in `matrix.yaml` first.
 2. Build and push the five images from `build/` to ECR (see
    [`docs/gromacs-delivery.md`](docs/gromacs-delivery.md)). Delivery is
    container-on-boot: `spawn` launches a bare AL2023 instance and `docker run`s
-   the arch-appropriate tag; `mdrun_wrapper.sh` is baked into each image at
-   `/opt/bench/`.
+   the arch-appropriate tag. `mdrun_wrapper.sh` is **mounted at run time** from
+   the repo (not baked), so wrapper edits take effect without rebuilding images.
 3. Stage `.tpr` files to `s3://<bucket>/gromacs-bench/tpr/` — two per workload,
    base plus an HMR variant (`<system>-hmr.tpr`, repartitioned masses, 4 fs
    `dt`). **Nothing here generates these** — build them with `grompp`.

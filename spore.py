@@ -70,6 +70,15 @@ HOST_WORK = "/tmp/bench"
 CTR_WORK = "/work"
 COMPLETION_FILE = f"{HOST_WORK}/SPAWN_COMPLETE"   # host path spawn watches
 
+# The wrapper is ORCHESTRATION, not part of the GROMACS build, so it is mounted
+# at run time rather than baked into the image -- otherwise every wrapper edit
+# needs all five images rebuilt (the bug that stranded Phase 1: images carried a
+# stale wrapper with no S3-push). Staged from the public repo during provision,
+# bind-mounted over the image's copy at run.
+HOST_WRAPPER = f"{HOST_WORK}/mdrun_wrapper.sh"
+CTR_WRAPPER = "/opt/bench/mdrun_wrapper.sh"
+WRAPPER_URL = ("https://github.com/scttfrdmn/aws-gromacs/raw/main/mdrun_wrapper.sh")
+
 
 def _registry(image: str) -> str:
     """ECR registry host from an image URI (everything before the first '/')."""
@@ -158,7 +167,13 @@ def pull(handle: str, image: str, region: str, gpu: bool = False) -> None:
     reg = _registry(image)
     login = (f"aws ecr get-login-password --region {shlex.quote(region)} "
              f"| sudo docker login --username AWS --password-stdin {shlex.quote(reg)}")
-    run_remote(handle, f"{login} && sudo docker pull {shlex.quote(image)}")
+    # Stage the current wrapper alongside the pull (both are provisioning). Fetch
+    # from the public repo so a wrapper edit takes effect without rebuilding the
+    # image.
+    stage_wrapper = (f"mkdir -p {HOST_WORK} && "
+                     f"curl -fsSL {shlex.quote(WRAPPER_URL)} -o {HOST_WRAPPER} && "
+                     f"chmod +x {HOST_WRAPPER}")
+    run_remote(handle, f"{login} && sudo docker pull {shlex.quote(image)} && {stage_wrapper}")
 
 
 def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> str:
@@ -179,9 +194,11 @@ def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> st
     gpu_flag = "--gpus all " if gpu else ""
     # --privileged: MIG/MPS setup in the wrapper needs nvidia-smi -mig / control.
     priv = "--privileged " if gpu else ""
+    # Mount the staged wrapper over the image's baked copy so the running
+    # orchestration always matches the repo, no image rebuild needed.
     cmd = (f"mkdir -p {HOST_WORK} && sudo docker run --rm {gpu_flag}{priv}"
-           f"-v {HOST_WORK}:{CTR_WORK} {docker_env} {shlex.quote(image)} "
-           f"bash /opt/bench/mdrun_wrapper.sh")
+           f"-v {HOST_WORK}:{CTR_WORK} -v {HOST_WRAPPER}:{CTR_WRAPPER}:ro "
+           f"{docker_env} {shlex.quote(image)} bash {CTR_WRAPPER}")
     return run_remote(handle, cmd)
 
 
