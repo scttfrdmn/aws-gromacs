@@ -188,14 +188,21 @@ def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> st
 def run_remote(handle: str, command: str, env: dict[str, str] | None = None) -> str:
     """Execute a shell command on the instance, return its stdout.
 
-    Verified: `spawn connect <name> -- <cmd>...` runs a command over SSH.
-    # SPORE: end-to-end (env propagation, exit-code passthrough) unconfirmed
-    until the Phase-1 live cell.
+    `spawn connect <name> -- <command>...` takes the command as VARIADIC args,
+    which SSH re-splits -- so `-- bash -lc "cmd with && and quotes"` arrives
+    mangled (bash: -c: option requires an argument). Feed the script over stdin
+    to `bash -s` instead: the payload never rides on argv, so quoting/&&/pipes
+    survive intact. (Verified against the live instances during Phase 1.)
     """
     env = env or {}
     env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
     full = f"{env_prefix} {command}".strip()
-    return _run(["spawn", "connect", handle, "--", "bash", "-lc", full])
+    if DRY_RUN:
+        print(f"[dry-run] spawn connect {handle} -- bash -s <<< {shlex.quote(full)}")
+        return ""
+    proc = subprocess.run(["spawn", "connect", handle, "--", "bash", "-s"],
+                          input=full, check=True, capture_output=True, text=True)
+    return proc.stdout
 
 
 def fetch(handle: str, remote_path: str, local_path: str) -> None:
@@ -210,12 +217,14 @@ def fetch(handle: str, remote_path: str, local_path: str) -> None:
     """
     remote = f"sudo tar czf - {remote_path} 2>/dev/null || true"
     if DRY_RUN:
-        print(f"[dry-run] spawn connect {handle} -- bash -lc {shlex.quote(remote)} "
+        print(f"[dry-run] spawn connect {handle} -- bash -s <<< {shlex.quote(remote)} "
               f"| tar xzf - -C {local_path}")
         return
     os.makedirs(local_path, exist_ok=True)
-    proc = subprocess.run(["spawn", "connect", handle, "--", "bash", "-lc", remote],
-                          check=True, capture_output=True)
+    # Script over stdin (bash -s) to dodge connect's argv re-splitting; tar
+    # binary comes back on stdout, so no text mode here.
+    proc = subprocess.run(["spawn", "connect", handle, "--", "bash", "-s"],
+                          input=remote.encode(), check=True, capture_output=True)
     subprocess.run(["tar", "xzf", "-", "-C", local_path],
                    input=proc.stdout, check=True)
 
