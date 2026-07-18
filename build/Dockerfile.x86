@@ -1,7 +1,11 @@
 FROM ubuntu:24.04
 ARG GMX=2025.2
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake wget ca-certificates awscli && rm -rf /var/lib/apt/lists/*
+      build-essential cmake wget curl unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+# awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
+# uname -m yields x86_64/aarch64, matching the bundle names.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+ && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
 RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
  && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
  && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=AVX_512 \

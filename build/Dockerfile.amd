@@ -1,7 +1,10 @@
 FROM ubuntu:24.04
 ARG GMX=2025.2
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      build-essential cmake wget ca-certificates awscli && rm -rf /var/lib/apt/lists/*
+      build-essential cmake wget curl unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+# awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+ && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
 # Zen 5 (EPYC Turin, c8a/hpc8a) has full-width AVX-512, unlike Zen 4's
 # double-pumped implementation. Build AVX_512 here; build an AVX2_256 variant
 # as a second image and compare -- on AMD the SIMD build choice has historically
