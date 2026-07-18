@@ -288,6 +288,10 @@ def main() -> int:
                          "Elasticity is the point -- cells are independent, on dedicated "
                          "instances, so parallel execution does not affect timing. Capped "
                          "to bound quota use + teardown blast radius. 1 = sequential.")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="skip the capacity-probe pre-pass (the optional wait-distribution "
+                         "sampling). Use when you just want the ns/$ spine -- the retry-path "
+                         "probe launches throwaway instances that cost money and can fail.")
     args = ap.parse_args()
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
@@ -346,25 +350,33 @@ def main() -> int:
     max_wait = float(cfg.get("capacity_max_wait_minutes", 30)) * 60
     cell_instance_ids = {inst["id"] for _, inst, _ in cells}
     for inst in cfg["instances"]:
-        if args.phase1 or inst["id"] not in cell_instance_ids:
+        if args.phase1 or args.no_probe or inst["id"] not in cell_instance_ids:
             continue
         prov = inst.get("provider", "aws")
         n = int(inst.get("wait_samples", inst.get("queue_samples", 0)))
         if not n:
             continue
-        if prov == "onprem":
-            queue_samples[inst["id"]] = providers.onprem_probe_queue(inst, n)
-        elif prov == "aws":
-            if cfg.get("use_lagotto", True):
-                # Watching is free, so a distribution costs nothing.
-                queue_samples[inst["id"]] = providers.lagotto_probe(
-                    inst["type"], cfg["region"], n, max_wait)
-            else:
-                queue_samples[inst["id"]] = providers.cloud_probe_capacity(
-                    inst["type"], cfg["region"], n, max_wait,
-                    lambda i=inst: (lambda: spore.spawn(
-                        i["type"], cfg["ttl_minutes"],
-                        cfg["idle_minutes"], cfg["region"], f"probe-{i['id']}")))
+        # The wait distribution is optional context, NOT the benchmark. A probe
+        # failure must degrade to "no samples for this instance" (wait then falls
+        # back to the single observed acquire), never abort the whole campaign
+        # before a cell runs.
+        try:
+            if prov == "onprem":
+                queue_samples[inst["id"]] = providers.onprem_probe_queue(inst, n)
+            elif prov == "aws":
+                if cfg.get("use_lagotto", True):
+                    # Watching is free, so a distribution costs nothing.
+                    queue_samples[inst["id"]] = providers.lagotto_probe(
+                        inst["type"], cfg["region"], n, max_wait)
+                else:
+                    queue_samples[inst["id"]] = providers.cloud_probe_capacity(
+                        inst["type"], cfg["region"], n, max_wait,
+                        lambda i=inst: (lambda: spore.spawn(
+                            i["type"], cfg["ttl_minutes"],
+                            cfg["idle_minutes"], cfg["region"], f"probe-{i['id']}")))
+        except Exception as e:
+            print(f"WARN probe for {inst['id']} failed, continuing without its "
+                  f"wait distribution: {str(e)[:120]}", file=sys.stderr)
 
     def run_one(wl: dict, inst: dict, cf: dict) -> dict:
         """Execute a single cell, returning its row. Each cell runs on its own
