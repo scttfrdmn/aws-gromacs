@@ -280,9 +280,16 @@ def main() -> int:
 
     # Probe wait distributions once, up front, independently of the benchmark
     # runs -- capacity acquisition for cloud pools, queue delay for on-prem.
+    # Only probe instances actually in this run's cells (never the whole matrix),
+    # and skip entirely for --phase1: that is a single plumbing-validation cell,
+    # where a wait *distribution* is meaningless and probing would spend on extra
+    # (possibly GPU) launches the phase never intended.
     queue_samples: dict[str, list[float]] = {}
     max_wait = float(cfg.get("capacity_max_wait_minutes", 30)) * 60
+    cell_instance_ids = {inst["id"] for _, inst, _ in cells}
     for inst in cfg["instances"]:
+        if args.phase1 or inst["id"] not in cell_instance_ids:
+            continue
         prov = inst.get("provider", "aws")
         n = int(inst.get("wait_samples", inst.get("queue_samples", 0)))
         if not n:
