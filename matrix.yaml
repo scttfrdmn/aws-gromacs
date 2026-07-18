@@ -29,7 +29,11 @@ capacity_max_wait_minutes: 30
 
 # Acquire capacity by watching (lagotto) rather than by failing repeatedly.
 # false falls back to the retry/backoff loop.
-use_lagotto: true
+# Set false until the Phase-1 cell validates the launch->pull->run->terminate
+# path: the retry path is fully verified syntax, whereas the lagotto async flow
+# is not yet exercised end-to-end. Validate one new thing at a time; flip to
+# true once the plumbing is proven and we want the capacity-watch behaviour.
+use_lagotto: false
 
 # ECR image URIs (docs/gromacs-delivery.md). One repo, five tags; spawn launches
 # a bare AL2023 instance and docker-runs the arch-appropriate tag on boot. Push
