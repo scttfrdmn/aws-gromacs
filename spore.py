@@ -229,6 +229,19 @@ def fetch(handle: str, remote_path: str, local_path: str) -> None:
                    input=proc.stdout, check=True)
 
 
+def fetch_s3(s3_prefix: str, local_path: str) -> None:
+    """Pull a cell's logs from S3 (where the wrapper pushed them before the
+    completion sentinel). Race-free vs. teardown, and works even if the instance
+    is already gone. Uses the local awscli + configured profile/creds.
+    """
+    if DRY_RUN:
+        print(f"[dry-run] aws s3 cp {s3_prefix}/ {local_path} --recursive")
+        return
+    os.makedirs(local_path, exist_ok=True)
+    subprocess.run(["aws", "s3", "cp", f"{s3_prefix}/", local_path,
+                    "--recursive", "--only-show-errors"], check=True)
+
+
 def terminate(handle: str) -> None:
     """Tear down explicitly. TTL/idle will also reap it, but do it on
     success/failure regardless. Verified via `spawn terminate --help`."""

@@ -104,11 +104,16 @@ def build_cells(cfg: dict, tier1: bool = False) -> list[tuple[dict, dict, dict]]
     return cells
 
 
-def env_for(cfg: dict, wl: dict, cf: dict, local: bool) -> dict[str, str]:
+def results_s3(cfg: dict, name: str) -> str:
+    """S3 prefix a cell pushes its logs to before signalling completion."""
+    return f"s3://{cfg['s3_bucket']}/gromacs-bench/results/{name}/logs"
+
+
+def env_for(cfg: dict, wl: dict, cf: dict, local: bool, name: str) -> dict[str, str]:
     tpr = f"{wl['tpr']}{cf.get('tpr_variant','')}.tpr"
     src = (f"{os.environ.get('LOCAL_TPR_DIR','./tpr')}/{tpr}" if local
            else f"s3://{cfg['s3_bucket']}/gromacs-bench/tpr/{tpr}")
-    return {
+    env = {
         "TPR_SRC": src,
         "NSTEPS": str(cfg["nsteps"]),
         "MDRUN_FLAGS": cf.get("mdrun_flags", ""),
@@ -118,6 +123,11 @@ def env_for(cfg: dict, wl: dict, cf: dict, local: bool) -> dict[str, str]:
         # Timed replicates for the ns/day CI. Config may override the global.
         "REPLICATES": str(cf.get("replicates", cfg.get("replicates", 3))),
     }
+    if not local:
+        # Push logs to S3 before the completion sentinel, so results are durable
+        # before spawn's --on-complete teardown can race the coordinator's fetch.
+        env["RESULTS_S3"] = results_s3(cfg, name)
+    return env
 
 
 def _expand_env(obj):
@@ -152,7 +162,7 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
     cell_dir = RESULTS / name
     (cell_dir / "logs").mkdir(parents=True, exist_ok=True)
     prov = inst.get("provider", "aws")
-    env = env_for(cfg, wl, cf, prov != "aws")
+    env = env_for(cfg, wl, cf, prov != "aws", name)
 
     if prov == "local":
         od = spot = float(inst.get("amortized_hr", 0.0))
@@ -198,8 +208,10 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
             # runtime = the docker run of the wrapper (the timed GROMACS work).
             spore.run_container(handle, image, env, gpu)
             done = time.time()
-            spore.fetch(handle, f"{spore.HOST_WORK}/logs/md*.log",
-                        str(cell_dir / "logs") + "/")
+            # Results were pushed to S3 by the wrapper before the sentinel, so
+            # read them from there -- durable even if --on-complete already
+            # terminated the box (avoids the fetch-vs-teardown race).
+            spore.fetch_s3(results_s3(cfg, name), str(cell_dir / "logs") + "/")
         finally:
             spore.terminate(handle)
         # Cloud queues too: acquire_s is contended-capacity wait, the direct

@@ -99,6 +99,14 @@ fi
 mkdir -p "$WORK/logs"
 find "$WORK" -name 'md*.log' -not -path "$WORK/logs/*" -exec cp {} "$WORK/logs/" \;
 
+# Push logs to S3 BEFORE the sentinel. The sentinel triggers spawn's
+# --on-complete teardown, which otherwise races (and beats) the coordinator's
+# fetch -- so results must be durable in S3 first. The coordinator then reads
+# them from S3, not off the (possibly already-terminated) instance.
+if [ -n "${RESULTS_S3:-}" ]; then
+  aws s3 cp "$WORK/logs/" "$RESULTS_S3/" --recursive --only-show-errors
+fi
+
 # Signal completion so spawn tears the instance down (--on-complete). Written
 # last, only on the success path -- `set -e` above aborts before here on any
 # mdrun failure, leaving no sentinel so the box is not reaped as "done".
