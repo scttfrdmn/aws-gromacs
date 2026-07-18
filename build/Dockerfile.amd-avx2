@@ -6,11 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
  && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
 # AVX2_256 variant: the comparison arm against the AVX_512 build on Zen 5.
+# -march=znver4: GCC 14.2 (Ubuntu 24.04) has no znver5; znver4 is the newest Zen
+# tuning it supports. See Dockerfile.amd for the full note.
 RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
  && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
  && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=AVX2_256 \
       -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
-      -DCMAKE_C_FLAGS="-march=znver5" -DCMAKE_CXX_FLAGS="-march=znver5" \
+      -DCMAKE_C_FLAGS="-march=znver4" -DCMAKE_CXX_FLAGS="-march=znver4" \
  && make -j"$(nproc)" && make install
 ENV PATH=/opt/gromacs/bin:$PATH
 COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh

@@ -29,7 +29,7 @@ The five Dockerfiles are not incidental packaging — they encode the experiment
 | image | SIMD build | why it exists |
 |-------|-----------|---------------|
 | intel | `AVX_512` | Intel baseline |
-| amd | `AVX_512`, `-march=znver5` | AMD full-width |
+| amd | `AVX_512`, `-march=znver4` | AMD full-width |
 | amd-avx2 | `AVX2_256` | **the "software beats hardware" arm** on identical AMD silicon |
 | arm | `ARM_SVE`, `-mcpu=neoverse-v2` | Graviton4 |
 | cuda | `GMX_GPU=CUDA` | all GPU cells (whole-card + MIG) |

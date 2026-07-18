@@ -9,11 +9,15 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -
 # double-pumped implementation. Build AVX_512 here; build an AVX2_256 variant
 # as a second image and compare -- on AMD the SIMD build choice has historically
 # been worth more than the instance choice, which is a finding, not a footnote.
+# -march: Ubuntu 24.04 ships GCC 14.2, which only knows up to znver4 (znver5
+# landed in GCC 14.3/15). znver4 already targets AVX-512 on Zen and is the
+# closest tuning the toolchain supports; revisit to znver5 when the base image's
+# GCC catches up.
 RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
  && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
  && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=AVX_512 \
       -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
-      -DCMAKE_C_FLAGS="-march=znver5" -DCMAKE_CXX_FLAGS="-march=znver5" \
+      -DCMAKE_C_FLAGS="-march=znver4" -DCMAKE_CXX_FLAGS="-march=znver4" \
  && make -j"$(nproc)" && make install
 ENV PATH=/opt/gromacs/bin:$PATH
 COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
