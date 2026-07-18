@@ -21,6 +21,7 @@ Replicates are tagged in the log filename as `rep<N>_...` by mdrun_wrapper.sh.
 Files with no rep tag are treated as a single replicate (back-compat).
 """
 from __future__ import annotations
+
 import glob
 import math
 import os

@@ -1,0 +1,13 @@
+# The docs (THESIS.md, PLAN.md, ...) are prose-heavy and use long lines, tables,
+# and inline HTML sparingly. Keep the rules that catch broken structure, relax
+# the stylistic ones that fight readable prose.
+default: true
+
+MD013: false   # line length -- prose wraps at sentence boundaries, not columns
+MD022: false   # blanks around headings -- docs pack heading+list tightly on purpose
+MD024:
+  siblings_only: true   # repeated headings OK across different sections
+MD032: false   # blanks around lists -- same tight prose+list style
+MD033: false   # inline HTML permitted where a table needs it
+MD041: false   # first line need not be a top-level heading everywhere
+MD060: false   # table pipe spacing -- compact tables are intentional

@@ -1,0 +1,16 @@
+# matrix.yaml uses intentional column alignment (aligned image URIs, padded
+# keys) so the cross-product reads like a table. Relax the rules that would
+# fight that, keep the ones that catch real mistakes.
+extends: default
+
+rules:
+  document-start: disable        # single-doc config files, no --- needed
+  colons:
+    max-spaces-after: -1         # allow aligned key: value columns
+  line-length:
+    max: 100
+    allow-non-breakable-words: true
+  comments:
+    min-spaces-from-content: 1   # inline "# ..." annotations are dense on purpose
+  truthy:
+    check-keys: false

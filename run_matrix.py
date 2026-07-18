@@ -15,6 +15,7 @@ Emits results/results.csv with ns/day and $/ns. NOT $/result -- ns/day is not a
 result. Derive $/result downstream once a convergence criterion exists.
 """
 from __future__ import annotations
+
 import argparse
 import csv
 import os
@@ -46,7 +47,7 @@ FIELDS = ["workload", "atoms", "instance", "class", "config", "provider",
 def blank_row(wl, inst, cf, outcome, reason):
     """An infeasible cell is a row, not a gap. 'Could not run it at all' is a
     result -- and the typed reason is the argument."""
-    r = {k: "" for k in FIELDS}
+    r = dict.fromkeys(FIELDS, "")
     r.update(workload=wl["id"], atoms=wl["atoms"], instance=inst["id"],
              class_=inst["class"], config=cf["id"],
              provider=inst.get("provider", "aws"),

@@ -1,0 +1,22 @@
+# Tooling config for the gromacs-bench harness. This is not a packaged library
+# (the coordinator is a set of scripts run in place), so there is no [project]
+# table -- only linter config.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+# A pragmatic, idiomatic default set: pyflakes (F), pycodestyle errors (E),
+# import sorting (I), bugbear (B), comprehensions (C4), pyupgrade (UP).
+select = ["E", "F", "I", "B", "C4", "UP", "W"]
+# E501 (line length) is handled by the formatter's line-length, not the linter;
+# a few hand-aligned tables intentionally run long and are more readable that way.
+ignore = ["E501"]
+
+[tool.ruff.format]
+# Formatting is intentionally NOT enforced in CI: several modules (the Student-t
+# table in parse_log.py, the aligned dicts in run_matrix.py) are hand-aligned
+# for readability, and the auto-formatter would explode them. Run `ruff format`
+# only by choice. `ruff check` (lint) is the enforced gate.
+quote-style = "double"

@@ -65,7 +65,11 @@ setup_mig() {
   sudo nvidia-smi -mig 1 >/dev/null
   sudo nvidia-smi mig -dci >/dev/null 2>&1 || true
   sudo nvidia-smi mig -dgi >/dev/null 2>&1 || true
-  local p; p=$(printf "%s," $(yes "$MIG_PROFILE" | head -n "$MIG_SLICES")); p=${p%,}
+  # Repeat the profile MIG_SLICES times as a comma-separated list, e.g.
+  # 1g.24gb,1g.24gb,1g.24gb,1g.24gb for a 4-way carve.
+  local profiles=()
+  for ((s=0; s<MIG_SLICES; s++)); do profiles+=("$MIG_PROFILE"); done
+  local p; p=$(IFS=,; echo "${profiles[*]}")
   sudo nvidia-smi mig -cgi "$p" -C >/dev/null
   mapfile -t UUIDS < <(nvidia-smi -L | grep -oE 'MIG-[0-9a-f-]+')
   [ "${#UUIDS[@]}" -eq "$MIG_SLICES" ] || {

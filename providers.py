@@ -22,6 +22,7 @@ Both sides are sampled as distributions, and both can fail outright:
 capacity that never arrives is `infeasible:capacity` regardless of provider.
 """
 from __future__ import annotations
+
 import json
 import os
 import re
@@ -100,7 +101,6 @@ def onprem_wait_and_run(inst: dict, env: dict[str, str], workdir: str,
                         poll_s: int = 15) -> Timing:
     """Submit, then measure queue wait and runtime SEPARATELY via sacct."""
     t = Timing()
-    submitted = time.time()
     job = onprem_submit(inst, env, workdir)
     if DRY_RUN:
         return Timing(runtime_s=0.0, wait_s=0.0)
@@ -191,7 +191,7 @@ def cloud_acquire(spawn_fn, max_wait_s: float, backoff_s: float = 20.0):
                 raise
             if time.time() - t0 >= max_wait_s:
                 raise CapacityUnavailable(
-                    f"no capacity after {max_wait_s:.0f}s ({attempt} attempts): {msg[:120]}")
+                    f"no capacity after {max_wait_s:.0f}s ({attempt} attempts): {msg[:120]}") from e
             attempt += 1
             if DRY_RUN:
                 return "dry-handle", 0.0

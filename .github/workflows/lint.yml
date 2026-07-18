@@ -1,0 +1,63 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: ruff (lint)
+        uses: astral-sh/ruff-action@v3
+        with:
+          args: check
+      - name: py_compile (syntax)
+        run: python -m py_compile *.py
+
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install shellcheck
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+      - name: shellcheck
+        run: shellcheck mdrun_wrapper.sh
+      - name: bash -n (syntax)
+        run: bash -n mdrun_wrapper.sh
+
+  yaml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: yamllint
+        run: pipx install yamllint && yamllint .
+
+  markdown:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: markdownlint
+        uses: DavidAnson/markdownlint-cli2-action@v20
+        with:
+          globs: "**/*.md"
+
+  dry-run:
+    # The load-bearing invariant: the dry sweep must enumerate exactly 90 cells.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - name: dry sweep must produce 90 rows
+        run: |
+          DRY_RUN=1 python run_matrix.py --list | tail -1 | grep -q '^90 cells$'
+          DRY_RUN=1 python run_matrix.py | tail -1 | grep -q '(90 rows)'

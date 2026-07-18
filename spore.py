@@ -5,6 +5,7 @@ against your installed spore.host CLI (or swap these bodies for MCP calls).
 Every function honors DRY_RUN, which just prints the command it would run.
 """
 from __future__ import annotations
+
 import json
 import os
 import shlex
