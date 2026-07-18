@@ -28,7 +28,7 @@ The five Dockerfiles are not incidental packaging — they encode the experiment
 
 | image | SIMD build | why it exists |
 |-------|-----------|---------------|
-| x86 | `AVX_512` | Intel baseline |
+| intel | `AVX_512` | Intel baseline |
 | amd | `AVX_512`, `-march=znver5` | AMD full-width |
 | amd-avx2 | `AVX2_256` | **the "software beats hardware" arm** on identical AMD silicon |
 | arm | `ARM_SVE`, `-mcpu=neoverse-v2` | Graviton4 |
@@ -78,7 +78,7 @@ inside a quantity the harness measures and a demo (D10) explicitly studies.
 
 ## Concrete Phase-0 changes this implies
 
-1. **ECR repo + five tags.** e.g. `${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:{x86-avx512,amd-avx512,amd-avx2,arm-sve,cuda}` (account/region come from the env so nothing account-specific is committed). These are already the `images:` URIs in `matrix.yaml` (resolves #1's image placeholders).
+1. **ECR repo + five tags.** e.g. `${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:{intel-avx512,amd-avx512,amd-avx2,arm-sve,cuda}` (account/region come from the env so nothing account-specific is committed). These are already the `images:` URIs in `matrix.yaml` (resolves #1's image placeholders).
 2. **`spore.spawn` gains a `--command`** that: ECR-login, `docker run` the passed image with the cell's env and (GPU cells) `--gpus all`, bind-mounting a host work dir so logs + `/tmp/SPAWN_COMPLETE` land where spawn and `fetch()` expect them.
 3. **Region.** ECR/`truffle`/`spawn` should agree. `matrix.yaml` says `us-east-1`; the shell default is `us-west-2`. Pick one for the run (recommend `us-east-1` to match the matrix) and set it explicitly.
 4. **`s3_bucket`** for `.tpr` staging (#3) and results sync — still required.

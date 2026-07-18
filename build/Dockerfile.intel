@@ -1,3 +1,4 @@
+# Intel arm (arch key `intel`): AVX-512 build, runs on c8i.
 FROM ubuntu:24.04
 ARG GMX=2025.2
 RUN apt-get update && apt-get install -y --no-install-recommends \

@@ -38,7 +38,7 @@ images:
   # Registry is ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com, filled from
   # the env (see above). Tags: Intel AVX-512 / Zen5 AVX-512 / Zen5 AVX2_256 /
   # Graviton4 SVE2 / GPU CUDA.
-  x86: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:x86-avx512
+  intel: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:intel-avx512
   amd: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx512
   amd_avx2: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx2
   arm: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:arm-sve
@@ -63,7 +63,7 @@ instances:
     provider: aws
     type: c8i.24xlarge
     class: cpu
-    arch: x86
+    arch: intel
 
   # AMD EPYC Turin (Zen 5). 4.5 GHz, 33% more memory bandwidth than c7a --
   # the bandwidth number is the one that matters for MD, not the clock.

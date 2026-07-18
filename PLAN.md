@@ -95,7 +95,7 @@ combinations not worth the spend. Guard the cross product -- check
 
 ## Build prep — do this first (the real gotcha)
 One image will not cover the matrix. Build five (`build/`):
-- `Dockerfile.x86`      → Intel, `GMX_SIMD=AVX_512`
+- `Dockerfile.intel`    → Intel, `GMX_SIMD=AVX_512`
 - `Dockerfile.amd`      → Zen 5, `GMX_SIMD=AVX_512`, `-march=znver5`
 - `Dockerfile.amd-avx2` → Zen 5, `GMX_SIMD=AVX2_256` (comparison arm)
 - `Dockerfile.arm`  → `GMX_SIMD=ARM_SVE`, `-mcpu=neoverse-v2`

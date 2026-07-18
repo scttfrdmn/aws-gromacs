@@ -12,7 +12,7 @@
 #   AWS_REGION     region for ECR login
 #   REPO_URL       git URL of this repo (public)
 #   BUILDS         space-separated tag=dockerfile pairs, e.g.
-#                  "x86-avx512=Dockerfile.x86 cuda=Dockerfile.cuda"
+#                  "intel-avx512=Dockerfile.intel cuda=Dockerfile.cuda"
 #   COMPLETION_FILE  sentinel for spawn --on-complete (touched on success only)
 set -euo pipefail
 

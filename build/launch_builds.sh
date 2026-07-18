@@ -24,12 +24,12 @@ TTL="3h"; IDLE="30m"
 declare -A INSTANCE=(
   [arm]="c8g.8xlarge"
   [amd]="c8a.8xlarge"
-  [x86]="c8i.8xlarge"
+  [intel]="c8i.8xlarge"
 )
 declare -A BUILDS=(
   [arm]="arm-sve=Dockerfile.arm"
   [amd]="amd-avx512=Dockerfile.amd amd-avx2=Dockerfile.amd-avx2"
-  [x86]="x86-avx512=Dockerfile.x86 cuda=Dockerfile.cuda"
+  [intel]="intel-avx512=Dockerfile.intel cuda=Dockerfile.cuda"
 )
 
 launch() {
@@ -55,7 +55,7 @@ curl -fsSL ${REPO_URL%.git}/raw/main/build/build_and_push.sh | bash"
     -o json
 }
 
-for key in arm amd x86; do
+for key in arm amd intel; do
   launch "$key"
 done
 
