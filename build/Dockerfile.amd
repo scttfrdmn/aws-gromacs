@@ -1,0 +1,17 @@
+FROM ubuntu:24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget ca-certificates awscli && rm -rf /var/lib/apt/lists/*
+# Zen 5 (EPYC Turin, c8a/hpc8a) has full-width AVX-512, unlike Zen 4's
+# double-pumped implementation. Build AVX_512 here; build an AVX2_256 variant
+# as a second image and compare -- on AMD the SIMD build choice has historically
+# been worth more than the instance choice, which is a finding, not a footnote.
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=AVX_512 \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+      -DCMAKE_C_FLAGS="-march=znver5" -DCMAKE_CXX_FLAGS="-march=znver5" \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh

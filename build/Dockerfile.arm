@@ -1,0 +1,14 @@
+FROM arm64v8/ubuntu:24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget ca-certificates awscli && rm -rf /var/lib/apt/lists/*
+# neoverse-v2 = Graviton4 (c8g). Use neoverse-v1 for Graviton3E (hpc7g).
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=ARM_SVE \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+      -DCMAKE_C_FLAGS="-mcpu=neoverse-v2" -DCMAKE_CXX_FLAGS="-mcpu=neoverse-v2" \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh

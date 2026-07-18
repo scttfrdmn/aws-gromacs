@@ -1,0 +1,15 @@
+FROM nvidia/cuda:12.6.2-devel-ubuntu24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget ca-certificates awscli nvidia-utils-560 \
+ && rm -rf /var/lib/apt/lists/*
+# Whole-card and MIG both use this image; GROMACS GPU kernels are single-precision,
+# so the RTX PRO 6000 FP64 rate is irrelevant here.
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_GPU=CUDA -DGMX_SIMD=AVX_512 \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh

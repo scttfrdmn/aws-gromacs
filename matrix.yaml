@@ -1,0 +1,202 @@
+# GROMACS benchmark matrix.
+# A cell is (workload x instance x config). Configs are the "there is more than
+# one way to run this" axis: timestep/HMR, force placement, MIG carve.
+# Fill in bucket + image URIs before running.
+
+s3_bucket: CHANGE-ME-bucket          # -> s3://<bucket>/gromacs-bench/tpr/*.tpr
+region: us-east-1
+nsteps: 20000                        # timed run length; -resethway halves it
+ttl_minutes: 120
+idle_minutes: 15
+
+# ns/day is noisy run-to-run (thermal, noisy neighbours, PME tuning draw, DVFS,
+# spot placement). One timed run is not a measurement. Each cell runs this many
+# independent timed replicates; parse_log.py reports mean +/- 95% CI. A cell
+# can override with `replicates:` in its config entry. This is a CI on the
+# PERFORMANCE PROXY -- it is not scientific seed convergence, which stays
+# downstream (see PLAN-cost-per-result.md). >=3 needed for a defensible CI.
+replicates: 3
+
+# Cloud queues too. How long to keep retrying a contended pool before the cell
+# is recorded as infeasible:capacity -- the direct analogue of a batch job that
+# never leaves the queue.
+capacity_max_wait_minutes: 30
+
+# Acquire capacity by watching (lagotto) rather than by failing repeatedly.
+# false falls back to the retry/backoff loop.
+use_lagotto: true
+
+images:
+  x86:       CHANGE-ME/gromacs:x86-avx512      # Intel, AVX-512
+  amd:       CHANGE-ME/gromacs:amd-avx512      # Zen 5, full-width AVX-512
+  amd_avx2:  CHANGE-ME/gromacs:amd-avx2        # Zen 5, AVX2_256 comparison arm
+  arm:       CHANGE-ME/gromacs:arm-sve         # Graviton4, SVE2
+  cuda:      CHANGE-ME/gromacs:cuda
+
+workloads:
+  - id: small
+    tpr: benchMEM              # base name; variant suffix appended, .tpr added
+    atoms: 82000
+  - id: medium
+    tpr: channel500k
+    atoms: 500000
+  - id: large
+    tpr: benchRIB
+    atoms: 2000000
+
+# ---------------------------------------------------------------------------
+# Instances. provider: aws (spawn via spore) | local (run in place, fixed cost).
+# ---------------------------------------------------------------------------
+instances:
+  - id: c8i
+    provider: aws
+    type: c8i.24xlarge
+    class: cpu
+    arch: x86
+
+  # AMD EPYC Turin (Zen 5). 4.5 GHz, 33% more memory bandwidth than c7a --
+  # the bandwidth number is the one that matters for MD, not the clock.
+  - id: c8a
+    provider: aws
+    type: c8a.24xlarge
+    class: cpu
+    arch: amd
+
+  # Same silicon, AVX2_256 build. On AMD the SIMD build choice has historically
+  # been worth more than the instance choice; this arm tests that directly.
+  - id: c8a-avx2
+    provider: aws
+    type: c8a.24xlarge
+    class: cpu
+    arch: amd_avx2
+
+  - id: c8g                    # Graviton4, SVE2
+    provider: aws
+    type: c8g.24xlarge
+    class: cpu
+    arch: arm
+
+  - id: g6                     # L4
+    provider: aws
+    type: g6.4xlarge
+    class: gpu
+    arch: cuda
+
+  - id: g6e                    # L40S
+    provider: aws
+    type: g6e.2xlarge
+    class: gpu
+    arch: cuda
+    wait_samples: 10
+
+  - id: g7e                    # RTX PRO 6000 Blackwell
+    provider: aws
+    type: g7e.2xlarge
+    class: gpu
+    arch: cuda
+    wait_samples: 10           # probe capacity-acquisition distribution
+
+  # Local hardware as first-class arms (D3). amortized_hr = your own number:
+  # (capital + power) / expected lifetime hours. Put the assumption in writing.
+  - id: local-5090
+    provider: local
+    type: RTX-5090
+    class: gpu
+    arch: cuda
+    amortized_hr: 0.35
+
+  - id: local-spark
+    provider: local
+    type: DGX-Spark
+    class: gpu
+    arch: cuda
+    amortized_hr: 0.15
+
+  # On-prem arm. Same harness, submitted through the site scheduler. Cost is
+  # optional on purpose -- most sites cannot defend a $/hr and do not want the
+  # argument. time/result works without it.
+  - id: onprem-cluster
+    provider: onprem
+    type: local-slurm
+    class: gpu
+    arch: cuda
+    partition: gpu
+    submit: sbatch
+    amortized_hr: 0.0          # 0 => $/ns columns blank, time columns still valid
+    wait_samples: 20           # probe submissions used to build the wait distribution
+
+# ---------------------------------------------------------------------------
+# Configs: the methodology axis. applies_to matches instance class or id.
+# mdrun_flags are appended verbatim. tpr_variant selects a prebuilt .tpr.
+# ---------------------------------------------------------------------------
+configs:
+  # --- D2: force placement (GPU only) ---
+  - id: gpu-resident           # baseline "modern" placement
+    applies_to: [gpu]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -pin on"
+
+  - id: gpu-cpu-pme            # PME back on the CPU
+    applies_to: [gpu]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme cpu -bonded cpu -update cpu -pin on"
+
+  # --- D1: hydrogen mass repartitioning (needs benchXXX-hmr.tpr, 4 fs dt) ---
+  - id: hmr
+    applies_to: [gpu]
+    tpr_variant: "-hmr"
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -pin on"
+
+  - id: cpu-hmr
+    applies_to: [cpu]
+    tpr_variant: "-hmr"
+    mdrun_flags: "-pin on"
+
+  # --- CPU baseline ---
+  - id: cpu-base
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-pin on"
+
+  # --- D13: MIG carves (g7e only). mig_slices>0 => one sim per slice. ---
+  - id: mig2
+    applies_to: [g7e]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mig_slices: 2
+    mig_profile: 2g.48gb
+
+  - id: mig4
+    applies_to: [g7e]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mig_slices: 4
+    mig_profile: 1g.24gb
+
+  # --- MPS packing, for comparison against the MIG carves ---
+  - id: mps4
+    applies_to: [g7e, g6e]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mps_procs: 4
+
+# ---------------------------------------------------------------------------
+# Infeasible cells. These are NOT dropped -- they emit a row with outcome and a
+# typed reason, because "couldn't run it at all" is a result. Classes:
+#   capacity   - not enough of the resource exists
+#   latency    - wait exceeds the useful life of the answer
+#   hardware   - no device of that class present
+#   elasticity - width cannot vary mid-campaign
+#   fit        - problem does not fit the device
+infeasible:
+  - {instance: local-spark, workload: large, class: fit,
+     reason: "2M atoms exceeds usable unified memory for this config"}
+  - {config: mig4, workload: large, class: fit,
+     reason: "2M atoms in a 1g.24gb slice"}
+  - {instance: onprem-cluster, config: mig2, class: hardware,
+     reason: "no MIG-capable cards in the cluster"}
+  - {instance: onprem-cluster, config: mig4, class: hardware,
+     reason: "no MIG-capable cards in the cluster"}
+
+# Skip = do not run, do not report (genuinely uninteresting, not a finding).
+skip: []
