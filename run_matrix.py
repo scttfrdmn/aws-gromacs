@@ -23,6 +23,7 @@ import pathlib
 import re
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import yaml
 
@@ -282,6 +283,11 @@ def main() -> int:
                     help="comma list of config ids to include (default: all)")
     ap.add_argument("--exclude-configs", default="",
                     help="comma list of config ids to exclude (e.g. hmr when no -hmr tpr is staged)")
+    ap.add_argument("--max-parallel", type=int, default=8,
+                    help="max cells running concurrently (each on its own instance). "
+                         "Elasticity is the point -- cells are independent, on dedicated "
+                         "instances, so parallel execution does not affect timing. Capped "
+                         "to bound quota use + teardown blast radius. 1 = sequential.")
     args = ap.parse_args()
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
@@ -360,19 +366,13 @@ def main() -> int:
                         i["type"], cfg["ttl_minutes"],
                         cfg["idle_minutes"], cfg["region"], f"probe-{i['id']}")))
 
-    rows = []
-    for wl, inst, cf in cells:
-        verdict = infeasible_for(cfg.get("infeasible"), wl, inst, cf)
-        if verdict:
-            outcome, reason = verdict
-            rows.append(blank_row(wl, inst, cf, outcome, reason))
-            print(f"--  {inst['id']:14s} {cf['id']:12s} {wl['id']:7s} {outcome} ({reason})")
-            continue
+    def run_one(wl: dict, inst: dict, cf: dict) -> dict:
+        """Execute a single cell, returning its row. Each cell runs on its own
+        dedicated instance, so this is safe to call concurrently -- and doing so
+        is the thesis (elastic width), not a shortcut. ns/day comes from GROMACS's
+        own timers on that box, unaffected by other in-flight cells."""
         try:
             row = run_cell(cfg, wl, inst, cf, queue_samples)
-            rows.append(row)
-            # Flag cells whose ns/day is under-replicated or too noisy to trust
-            # as a single point -- a wide CI is a finding, not something to hide.
             noisy = row["replicates"] and row["replicates"] < 3
             wide = row["ns_day_rel_ci"] and row["ns_day_rel_ci"] > 0.05
             flag = " !thin" if noisy else (" !wide-CI" if wide else "")
@@ -382,16 +382,42 @@ def main() -> int:
                   f"n={row['replicates']} "
                   f"acq={row['acquire_s']:>6}s prov={row['provision_s']:>6}s "
                   f"ttr={row['time_to_result_s']:>8}s{flag}")
+            return row
         except providers.CapacityUnavailable as e:
             # Cloud's own queue failing to deliver. Same outcome class as an
             # on-prem job that never starts.
-            rows.append(blank_row(wl, inst, cf, "infeasible:capacity", str(e)[:200]))
             print(f"--  {inst['id']:14s} {cf['id']:12s} {wl['id']:7s} "
                   f"infeasible:capacity ({e})")
+            return blank_row(wl, inst, cf, "infeasible:capacity", str(e)[:200])
         except Exception as e:
-            rows.append(blank_row(wl, inst, cf, "error", str(e)[:200]))
             print(f"ERR {inst['id']:14s} {cf['id']:12s} {wl['id']:7s} {e}",
                   file=sys.stderr)
+            return blank_row(wl, inst, cf, "error", str(e)[:200])
+
+    rows = []
+    runnable = []
+    for wl, inst, cf in cells:
+        verdict = infeasible_for(cfg.get("infeasible"), wl, inst, cf)
+        if verdict:
+            # Infeasible cells launch nothing -- record synchronously, no worker.
+            outcome, reason = verdict
+            rows.append(blank_row(wl, inst, cf, outcome, reason))
+            print(f"--  {inst['id']:14s} {cf['id']:12s} {wl['id']:7s} {outcome} ({reason})")
+        else:
+            runnable.append((wl, inst, cf))
+
+    # Elastic width: run independent cells concurrently, capped so quota and the
+    # teardown blast radius stay bounded. Each cell self-terminates on completion.
+    workers = max(1, min(args.max_parallel, len(runnable)))
+    if workers == 1:
+        for wl, inst, cf in runnable:
+            rows.append(run_one(wl, inst, cf))
+    else:
+        print(f"running {len(runnable)} cells, up to {workers} concurrent")
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futs = [pool.submit(run_one, wl, inst, cf) for wl, inst, cf in runnable]
+            for fut in as_completed(futs):
+                rows.append(fut.result())
 
     with open(CSV_PATH, "w", newline="") as fh:
         w = csv.DictWriter(fh, fieldnames=FIELDS)
