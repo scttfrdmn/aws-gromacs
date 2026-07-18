@@ -32,6 +32,10 @@ from parse_log import ns_day_stats
 
 RESULTS = pathlib.Path("results")
 CSV_PATH = RESULTS / "results.csv"
+# Instance role for benchmark cells: ECR pull + S3 read/write on the bench
+# bucket (the in-container `aws s3 cp` of the tpr needs it; the auto AL2023 AMI
+# ships no instance role by default).
+IAM_POLICY = str(pathlib.Path(__file__).parent / "build" / "benchmark-instance-policy.json")
 FIELDS = ["workload", "atoms", "instance", "class", "config", "provider",
           "outcome", "reason", "sims",
           # ns/day is a distribution over replicates, not a scalar. Report the
@@ -175,19 +179,21 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
             # Watch for capacity rather than discovering it by failing.
             handle, acquire_s, seen_s = providers.lagotto_acquire(
                 inst["type"], cfg["region"], max_wait,
-                cfg["ttl_minutes"], cfg["idle_minutes"], name)
+                cfg["ttl_minutes"], cfg["idle_minutes"], name,
+                iam_policy_file=IAM_POLICY)
             method = "lagotto"
         else:
             handle, acquire_s = providers.cloud_acquire(
                 lambda: spore.spawn(inst["type"], cfg["ttl_minutes"],
-                                    cfg["idle_minutes"], cfg["region"], name),
+                                    cfg["idle_minutes"], cfg["region"], name,
+                                    iam_policy_file=IAM_POLICY),
                 max_wait_s=max_wait)
             seen_s, method = acquire_s, "retry"
         granted = time.time()
         try:
-            # provision = boot + ECR login + image pull + stage. Timed as
-            # provision_s, kept out of runtime_s so the split stays honest.
-            spore.pull(handle, image, cfg["region"])
+            # provision = boot + runtime install + ECR login + pull + stage.
+            # Timed as provision_s, kept out of runtime_s so the split stays honest.
+            spore.pull(handle, image, cfg["region"], gpu=gpu)
             ready = time.time()
             # runtime = the docker run of the wrapper (the timed GROMACS work).
             spore.run_container(handle, image, env, gpu)

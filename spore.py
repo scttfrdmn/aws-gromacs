@@ -78,7 +78,8 @@ def _registry(image: str) -> str:
 
 def spawn(instance_type: str, ttl_minutes: int, idle_minutes: int,
           region: str, name: str, on_complete: str = "terminate",
-          pre_stop: str | None = None, ami: str | None = None) -> str:
+          pre_stop: str | None = None, ami: str | None = None,
+          iam_policy_file: str | None = None) -> str:
     """Launch a bare on-demand instance with auto-termination. Returns the name,
     which is the handle spawn uses for connect/terminate. GROMACS itself arrives
     later via pull()/run_container(); nothing GROMACS-specific is baked here.
@@ -114,22 +115,50 @@ def spawn(instance_type: str, ttl_minutes: int, idle_minutes: int,
         cmd += ["--ami", ami]
     if pre_stop:
         cmd += ["--pre-stop", pre_stop]
+    if iam_policy_file:
+        # Instance role: ECR pull + S3 read/write on the bench bucket, so the
+        # in-container `aws s3 cp` (tpr) and the docker ECR pull both work.
+        cmd += ["--iam-policy-file", iam_policy_file]
     _run(cmd)
     # Addressed by name from here on; no id parsing needed.
     return name
 
 
-def pull(handle: str, image: str, region: str) -> None:
-    """ECR-login and docker-pull the image on the instance. This is the
-    provisioning step -- its wall-clock belongs in `provision_s` (boot + pull +
-    stage), NOT `runtime_s`, so the timing split stays honest. Separated from
-    run_container() precisely so the caller can time it on the provision side.
-    # SPORE: docker/ECR presence on the auto AL2023 AMI unconfirmed until Phase 1.
+def ensure_runtime(handle: str, gpu: bool) -> None:
+    """Install the container runtime on the bare AL2023 instance. Verified in
+    Phase 1: the auto-detected AL2023 AMI does NOT ship Docker, so pull/run would
+    fail without this. For GPU cells also install the nvidia-container-toolkit so
+    `docker run --gpus all` works. Idempotent (dnf install is a no-op if present).
+    Part of provisioning, so its wall-clock lands in provision_s.
     """
+    steps = [
+        "sudo dnf install -y -q docker",
+        "sudo systemctl enable --now docker",
+    ]
+    if gpu:
+        # nvidia-container-toolkit repo + install, then wire it into docker.
+        steps += [
+            "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo "
+            "| sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null",
+            "sudo dnf install -y -q nvidia-container-toolkit",
+            "sudo nvidia-ctk runtime configure --runtime=docker",
+            "sudo systemctl restart docker",
+        ]
+    run_remote(handle, " && ".join(steps))
+
+
+def pull(handle: str, image: str, region: str, gpu: bool = False) -> None:
+    """Ensure the runtime, then ECR-login and docker-pull the image. This is the
+    provisioning step -- its wall-clock belongs in `provision_s` (boot + runtime
+    install + pull + stage), NOT `runtime_s`, so the timing split stays honest.
+    Separated from run_container() precisely so the caller times it on the
+    provision side.
+    """
+    ensure_runtime(handle, gpu)
     reg = _registry(image)
     login = (f"aws ecr get-login-password --region {shlex.quote(region)} "
-             f"| docker login --username AWS --password-stdin {shlex.quote(reg)}")
-    run_remote(handle, f"{login} && docker pull {shlex.quote(image)}")
+             f"| sudo docker login --username AWS --password-stdin {shlex.quote(reg)}")
+    run_remote(handle, f"{login} && sudo docker pull {shlex.quote(image)}")
 
 
 def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> str:
@@ -139,8 +168,7 @@ def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> st
     completion watcher and to fetch(). ns/day itself comes from GROMACS's own
     -resethway steady-state timers in the logs, not this wall-clock, so pull/boot
     overhead never contaminates the performance number.
-    # SPORE: --gpus all on the auto GPU AMI (nvidia container toolkit) unconfirmed
-    until Phase 1.
+    # GPU cells need the nvidia-container-toolkit, installed by ensure_runtime().
     """
     # WORK: container-side work dir. COMPLETION_FILE: point the wrapper's sentinel
     # at the bind-mounted dir so it appears on the host at COMPLETION_FILE (which
@@ -151,7 +179,7 @@ def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> st
     gpu_flag = "--gpus all " if gpu else ""
     # --privileged: MIG/MPS setup in the wrapper needs nvidia-smi -mig / control.
     priv = "--privileged " if gpu else ""
-    cmd = (f"mkdir -p {HOST_WORK} && docker run --rm {gpu_flag}{priv}"
+    cmd = (f"mkdir -p {HOST_WORK} && sudo docker run --rm {gpu_flag}{priv}"
            f"-v {HOST_WORK}:{CTR_WORK} {docker_env} {shlex.quote(image)} "
            f"bash /opt/bench/mdrun_wrapper.sh")
     return run_remote(handle, cmd)
@@ -175,11 +203,12 @@ def fetch(handle: str, remote_path: str, local_path: str) -> None:
 
     spawn has no `cp`/`scp` subcommand, so we stream a tar of the matched files
     through `spawn connect` and unpack locally. `remote_path` may be a glob.
+    sudo: the container runs as root, so the bind-mounted logs are root-owned.
     # SPORE: unconfirmed until the Phase-1 live cell. If this proves flaky, the
     # robust alternative is to have mdrun_wrapper.sh push logs to S3 and fetch
     # from there (the instance already has awscli + the configured bucket).
     """
-    remote = f"tar czf - {remote_path} 2>/dev/null || true"
+    remote = f"sudo tar czf - {remote_path} 2>/dev/null || true"
     if DRY_RUN:
         print(f"[dry-run] spawn connect {handle} -- bash -lc {shlex.quote(remote)} "
               f"| tar xzf - -C {local_path}")

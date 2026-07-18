@@ -304,7 +304,7 @@ def _lagotto_fired(watch_id: str) -> dict | None:
 
 def lagotto_acquire(instance_type: str, region: str, max_wait_s: float,
                     ttl_minutes: int, idle_minutes: int,
-                    name: str) -> tuple[str, float, float]:
+                    name: str, iam_policy_file: str | None = None) -> tuple[str, float, float]:
     """Register a watch, drive the poller, and launch a bare instance when
     capacity appears. GROMACS is delivered afterward via spore.pull/run_container
     by the caller, so no image is threaded through here.
@@ -339,7 +339,8 @@ def lagotto_acquire(instance_type: str, region: str, max_wait_s: float,
     seen_at = match["matched_at"]  # verified field (lagotto history)
     capacity_seen_s = (_epoch_utc(seen_at) - t0 if seen_at else time.time() - t0)
     from spore import spawn as _spawn
-    handle = _spawn(instance_type, ttl_minutes, idle_minutes, region, name)
+    handle = _spawn(instance_type, ttl_minutes, idle_minutes, region, name,
+                    iam_policy_file=iam_policy_file)
     acquire_s = time.time() - t0
     return handle, acquire_s, capacity_seen_s
 
