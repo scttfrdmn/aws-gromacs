@@ -122,21 +122,32 @@ def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
     if iam_policy_file:
         # Instance role: ECR pull + S3 read/write on the bench bucket.
         cmd += ["--iam-policy-file", iam_policy_file]
-    # Retry transient launch failures: concurrent launches can still race on
-    # shared-infra creation (IAM role, VPC/SG) or hit API throttling even with a
-    # stagger. A couple of backoff retries makes the batch robust. DRY_RUN and
-    # hard errors (bad AMI, quota) surface on the final attempt.
     if DRY_RUN:
         _run(cmd)
         return name
+    # Retry transient launch failures (shared-infra creation race, API throttle)
+    # with backoff. But InsufficientInstanceCapacity is NOT a bug -- it's the
+    # cloud's queue saying "no capacity right now", the direct analogue of a
+    # batch job that never starts. Per the thesis it's a typed finding
+    # (infeasible:capacity), so raise CapacityUnavailable for the coordinator to
+    # record as a row -- not a crash, and not endless retрy. We give capacity a
+    # few backoff attempts first, since GPU pools free up intermittently.
+    from providers import CapacityUnavailable
     last = None
-    for attempt in range(3):
+    for attempt in range(4):
         try:
             _run(cmd)
             return name
         except subprocess.CalledProcessError as e:
             last = e
-            time.sleep(5 * (attempt + 1))
+            err = (e.stderr or "") + (e.stdout or "")
+            if "InsufficientInstanceCapacity" in err or "InsufficientHostCapacity" in err:
+                if attempt < 3:
+                    time.sleep(20 * (attempt + 1))   # capacity may free up
+                    continue
+                raise CapacityUnavailable(
+                    f"{instance_type} in {region}: insufficient capacity after retries") from e
+            time.sleep(5 * (attempt + 1))   # other transient error
     raise last
 
 
