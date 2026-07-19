@@ -11,17 +11,23 @@ matrix's original `channel500k` was a placeholder name, not a real file. So we
 **build** a real mid-size system from a deposited PDB (`preprocess/build_medium.sh`).
 
 **Choices:**
-- **System:** *E. coli* β-galactosidase (deposited PDB), a large, widely-recognized
-  enzyme whose natural solvated size lands in the mid range between benchMEM and
-  benchRIB. Recognizable structural-biology system, not synthetic.
+- **System:** HEWL — hen egg-white lysozyme (PDB 1AKI), the canonical GROMACS
+  tutorial structure — solvated in a large water box. Size (~medium) is dialed by
+  box padding (`BOX_NM`, default 5.0 nm), not by the protein: protein-in-a-water-
+  box is the standard MD benchmark shape, and a clean structure + big box is far
+  more reliable to build unattended than a large crystal structure. (First tried
+  β-galactosidase 6X1Q; it fails pdb2gmx on an incomplete residue — "Incomplete
+  ring in HIS739" — the classic missing-atom problem of raw crystal PDBs. A clean
+  protein + `-missing` tolerance is the robust automated path.)
 - **Force field:** AMBER99SB-ILDN + TIP3P — both **bundled with GROMACS**, so the
   build needs no external download and is fully reproducible. Published, standard.
-- **Protocol:** pdb2gmx → dodecahedral box (1.0 nm) → solvate → 0.15 M NaCl →
-  energy minimization → NVT (100 ps, 300 K, V-rescale, position-restrained) →
-  NPT (100 ps, C-rescale barostat) → production. Real equilibration.
+- **Protocol:** pdb2gmx (`-ignh -missing`) → dodecahedral box (`-d BOX_NM`) →
+  solvate → 0.15 M NaCl → energy minimization → NVT (100 ps, 300 K, V-rescale,
+  position-restrained) → NPT (100 ps, C-rescale barostat) → production. Real
+  equilibration.
 - **`atoms`** in `matrix.yaml` is set from the **measured** count the build
   reports, not guessed. Anywhere ~300k–800k qualifies as "medium"; the point is
-  a real system between 82k and 2M, not a specific number.
+  a real system between 82k and 2M, tuned via box size.
 
 **Why it matters beyond size:** the distributed benchMEM/benchRIB tprs use
 `all-bonds` constraints, which preclude the GPU-resident update path

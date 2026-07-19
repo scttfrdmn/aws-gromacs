@@ -5,12 +5,18 @@
 # bundled AMBER99SB-ILDN force field). Equilibration is real (em/NVT/NPT), so the
 # system is scientifically sound, not a toy.
 #
-# System: E. coli beta-galactosidase (a large, widely-recognized enzyme; its
-# natural solvated size lands ~500k atoms). Force field: AMBER99SB-ILDN + TIP3P,
-# both bundled with GROMACS (no external download -> reproducible). 0.15 M NaCl.
+# System: protein in a water box, sized to ~medium via box padding (BOX_NM).
+# Default HEWL (hen egg-white lysozyme, PDB 1AKI) -- the canonical GROMACS
+# tutorial structure, guaranteed to pdb2gmx cleanly. A large solvent box brings
+# it to ~500k atoms (protein-in-water is the standard MD benchmark shape). Force
+# field: AMBER99SB-ILDN + TIP3P, both bundled with GROMACS (reproducible).
+# 0.15 M NaCl. NOTE: a raw large crystal structure (e.g. beta-gal 6X1Q) fails
+# pdb2gmx on incomplete residues -- hence a clean protein + big box, not a big
+# protein.
 #
 # Env in:
-#   PDB_ID        deposited structure to fetch (default 6X1Q, a beta-gal entry)
+#   PDB_ID        deposited structure to fetch (default 1AKI, clean HEWL)
+#   BOX_NM        solvent padding in nm (default 5.0 -> ~500k atoms; dials size)
 #   TPR_S3        s3://<bucket>/gromacs-bench/tpr   (uploads <SYS>.tpr + <SYS>-hmr.tpr)
 #   MDP_BASE_URL  raw URL prefix for the mdp files (this repo's preprocess/mdp)
 #   SYS           output basename (default channel-medium)
@@ -20,7 +26,7 @@
 #   COMPLETION_FILE  sentinel for spawn --on-complete (touched on success only)
 set -euo pipefail
 
-PDB_ID="${PDB_ID:-6X1Q}"
+PDB_ID="${PDB_ID:-1AKI}"   # HEWL, the canonical clean pdb2gmx structure
 MDRUN_NB="${MDRUN_NB:-cpu}"
 TPR_S3="${TPR_S3:?set TPR_S3}"
 MDP_BASE_URL="${MDP_BASE_URL:?set MDP_BASE_URL}"
@@ -47,14 +53,24 @@ curl -fsSL "https://files.rcsb.org/download/${PDB_ID}.pdb" -o raw.pdb
 # Keep only protein atoms (strip waters/ligands/hetatms the FF won't know).
 grep '^ATOM' raw.pdb > protein.pdb || true
 
+# System size is dialed by the solvent box padding (BOX_NM), NOT by needing a
+# huge protein -- protein-in-a-water-box is the standard MD benchmark shape, and
+# a clean, pdb2gmx-safe protein + a large box is far more reliable than a big
+# crystal structure (which fails on missing/incomplete residues, e.g. 'Incomplete
+# ring in HIS739' from a raw beta-gal entry). Default HEWL (1AKI) is THE canonical
+# tutorial structure, guaranteed clean. Tune BOX_NM to hit ~medium atom count.
+BOX_NM="${BOX_NM:-5.0}"   # ~500k atoms around HEWL; script reports actual count
+
 build_system() {  # $1 = topology dir tag, $2 = extra pdb2gmx flags (e.g. -heavyh)
   local tag="$1"; shift
   echo "== [$tag] pdb2gmx (AMBER99SB-ILDN + TIP3P) $* =="
-  # 6 = AMBER99SB-ILDN, 1 = TIP3P, via stdin selections; -ignh regenerates H.
+  # 6 = AMBER99SB-ILDN, 1 = TIP3P, via stdin selections. -ignh regenerates H;
+  # -missing tolerates incomplete residues in crystal structures (they get
+  # rebuilt/ignored) so the automated build isn't derailed by one bad sidechain.
   printf '6\n1\n' | "$GMX" pdb2gmx -f protein.pdb -o "${tag}_proc.gro" \
-    -p "${tag}.top" -i "${tag}_posre.itp" -ignh "$@"
-  echo "== [$tag] box + solvate =="
-  "$GMX" editconf -f "${tag}_proc.gro" -o "${tag}_box.gro" -c -d 1.0 -bt dodecahedron
+    -p "${tag}.top" -i "${tag}_posre.itp" -ignh -missing "$@"
+  echo "== [$tag] box + solvate (box padding ${BOX_NM} nm -> size target) =="
+  "$GMX" editconf -f "${tag}_proc.gro" -o "${tag}_box.gro" -c -d "$BOX_NM" -bt dodecahedron
   "$GMX" solvate -cp "${tag}_box.gro" -cs spc216.gro -o "${tag}_solv.gro" -p "${tag}.top"
   echo "== [$tag] add ions (0.15 M NaCl, neutralize) =="
   "$GMX" grompp -f mdp/em.mdp -c "${tag}_solv.gro" -p "${tag}.top" -o "${tag}_ions.tpr" -maxwarn 2
