@@ -46,6 +46,18 @@ triad bandwidth (`preprocess/sysinfo.sh`).
    above 2019's c5). Its cores starve for memory before c6i's (272 GB/s) do. The
    full-width number hides the per-core truth; the curve reveals it.
 
+   **On the LARGE system (benchRIB, 2M atoms, 96 cores) the bandwidth inversion
+   is unambiguous** — CIs razor-tight and non-overlapping:
+   c7i **8.91 ± 0.02** < c6i **9.62 ± 0.01** < c8i **12.04 ± 0.10** ns/day.
+   Ordering follows STREAM bandwidth exactly (186 < 272 < 355), NOT generation
+   number: the 2023 c7i is genuinely, measurably slower than the 2021 c6i on a
+   memory-bound 2M-atom system, because AWS gives c7i.24xlarge less bandwidth.
+   Where the small system left c6i/c7i within noise, the large system — which
+   truly saturates memory — separates them cleanly. (c5 large: ~6.08 ns/day, rep0
+   only — it was so slow on 2M atoms it hit the idle/TTL window before finishing
+   3 replicates: old gen can be operationally unviable for large work, not just
+   slower-per-dollar.)
+
 3. **Every generation collapses at 64 cores — a domain-decomposition artifact.**
    Core-count sweep (ns/day vs -nt), benchMEM:
 
