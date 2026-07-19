@@ -316,12 +316,23 @@ def main() -> int:
                     help="seconds between concurrent launch submissions. spawn creates shared "
                          "infra (IAM role, VPC/SG) on first use; simultaneous launches race to "
                          "create the same role and fail. A stagger lets the first win. 0 = none.")
+    ap.add_argument("--ttl-minutes", type=int, default=0,
+                    help="override matrix.yaml ttl_minutes (0 = use config). Raise for slow "
+                         "cells (old gen on big systems can need hours for 3 replicates).")
+    ap.add_argument("--idle-minutes", type=int, default=0,
+                    help="override matrix.yaml idle_minutes (0 = use config).")
     args = ap.parse_args()
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
         spore.DRY_RUN = True
 
     cfg = _expand_env(yaml.safe_load(open(args.config)))
+    # CLI overrides for lifetime bounds (slow cells -- e.g. old gen on 2M atoms --
+    # can need hours for 3 replicates; the default TTL would reap them mid-run).
+    if args.ttl_minutes:
+        cfg["ttl_minutes"] = args.ttl_minutes
+    if args.idle_minutes:
+        cfg["idle_minutes"] = args.idle_minutes
     RESULTS.mkdir(exist_ok=True)
 
     if args.phase1:
