@@ -11,23 +11,30 @@ matrix's original `channel500k` was a placeholder name, not a real file. So we
 **build** a real mid-size system from a deposited PDB (`preprocess/build_medium.sh`).
 
 **Choices:**
-- **System:** HEWL — hen egg-white lysozyme (PDB 1AKI), the canonical GROMACS
-  tutorial structure — solvated in a large water box. Size (~medium) is dialed by
-  box padding (`BOX_NM`, default 5.0 nm), not by the protein: protein-in-a-water-
-  box is the standard MD benchmark shape, and a clean structure + big box is far
-  more reliable to build unattended than a large crystal structure. (First tried
-  β-galactosidase 6X1Q; it fails pdb2gmx on an incomplete residue — "Incomplete
-  ring in HIS739" — the classic missing-atom problem of raw crystal PDBs. A clean
-  protein + `-missing` tolerance is the robust automated path.)
-- **Force field:** AMBER99SB-ILDN + TIP3P — both **bundled with GROMACS**, so the
-  build needs no external download and is fully reproducible. Published, standard.
-- **Protocol:** pdb2gmx (`-ignh -missing`) → dodecahedral box (`-d BOX_NM`) →
-  solvate → 0.15 M NaCl → energy minimization → NVT (100 ps, 300 K, V-rescale,
-  position-restrained) → NPT (100 ps, C-rescale barostat) → production. Real
-  equilibration.
+- **System:** a real **membrane protein in a POPC bilayer** — the same *class* as
+  benchMEM (82k), scaled to ~medium. Built with **CHARMM-GUI Membrane Builder**
+  (the field-standard tool), which embeds the protein in the bilayer, solvates,
+  ionizes (0.15 M KCl), and exports **GROMACS inputs + CHARMM36m** directly.
+- **Force field:** CHARMM36m (as CHARMM-GUI ships it) — note this differs from
+  the AMBER/GROMACS-SIMD arms; the point of `medium` is a real mid-size membrane
+  system, and it carries its own consistent FF. Recorded here as the deviation.
+- **Ingestion:** `preprocess/build_medium_charmmgui.sh` runs CHARMM-GUI's own
+  equilibration chain (minimization → step6.1–6.6 graduated-restraint equilibration)
+  verbatim, then grompps the base (2 fs, CHARMM-GUI step7) and HMR (4 fs) production
+  tprs. HMR masses are repartitioned with **ParmEd `HMassRepartition`** on the
+  CHARMM-GUI topology (there is no gmx/grompp flag for HMR).
 - **`atoms`** in `matrix.yaml` is set from the **measured** count the build
-  reports, not guessed. Anywhere ~300k–800k qualifies as "medium"; the point is
-  a real system between 82k and 2M, tuned via box size.
+  reports. Sized in CHARMM-GUI (bilayer patch) to land ~300–500k.
+
+**Why CHARMM-GUI and not a scripted build:** a correct atomistic membrane system
+is genuinely hard to assemble unattended — membrane insertion + FF correctness is
+the error-prone core of membrane MD. Earlier attempts confirmed this: raw crystal
+PDBs fail pdb2gmx on incomplete residues (β-gal 6X1Q, "Incomplete ring in
+HIS739"), and a plain protein-in-water box is not a recognizable membrane system.
+The deposited CHARMM-GUI archive for SERCA (1SU4) exists but is CHARMM-only (no
+full-system topology; needs licensed CHARMM to assemble). So the real path is to
+let CHARMM-GUI build it and export GROMACS, then ingest that. (The AMBER
+`build_medium.sh` remains for a soluble-protein build but is not the medium path.)
 
 **Why it matters beyond size:** the distributed benchMEM/benchRIB tprs use
 `all-bonds` constraints, which preclude the GPU-resident update path
