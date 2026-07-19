@@ -61,189 +61,60 @@ def truffle_price(instance_type: str, region: str) -> Prices:
     return Prices(on_demand_hr=on_demand, spot_hr=spot)
 
 
-# GROMACS is delivered as a container (docs/gromacs-delivery.md): spawn launches
-# a bare AL2023 instance (auto-detected AMI, GPU variants already carry NVIDIA
-# drivers), then we docker-pull + docker-run the arch-appropriate image. The work
-# dir is bind-mounted host<->container so logs and the completion sentinel land
-# where spawn (host) and fetch() can see them.
+# GROMACS is delivered as a container (docs/gromacs-delivery.md), and each cell
+# runs AUTONOMOUSLY: spawn launches a bare AL2023 instance whose --command is
+# cell_runner.sh, which installs docker, pulls the arch image, runs the wrapper,
+# writes logs + timing.json to S3, and self-terminates. The coordinator never
+# holds an SSH session -- it launches and polls S3. This replaced the earlier
+# `spawn connect`-per-cell model, whose long-lived concurrent SSH sessions
+# deadlocked the parallel batch (only the autonomous build instances ran clean).
 HOST_WORK = "/tmp/bench"
-CTR_WORK = "/work"
 COMPLETION_FILE = f"{HOST_WORK}/SPAWN_COMPLETE"   # host path spawn watches
-
-# The wrapper is ORCHESTRATION, not part of the GROMACS build, so it is mounted
-# at run time rather than baked into the image -- otherwise every wrapper edit
-# needs all five images rebuilt (the bug that stranded Phase 1: images carried a
-# stale wrapper with no S3-push). Staged from the public repo during provision,
-# bind-mounted over the image's copy at run.
-HOST_WRAPPER = f"{HOST_WORK}/mdrun_wrapper.sh"
-CTR_WRAPPER = "/opt/bench/mdrun_wrapper.sh"
-WRAPPER_URL = ("https://github.com/scttfrdmn/aws-gromacs/raw/main/mdrun_wrapper.sh")
+RUNNER_URL = "https://github.com/scttfrdmn/aws-gromacs/raw/main/cell_runner.sh"
+WRAPPER_URL = "https://github.com/scttfrdmn/aws-gromacs/raw/main/mdrun_wrapper.sh"
 
 
-def _registry(image: str) -> str:
-    """ECR registry host from an image URI (everything before the first '/')."""
-    return image.split("/", 1)[0]
+def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
+                ttl_minutes: int, idle_minutes: int, region: str, name: str,
+                results_s3: str, iam_policy_file: str | None = None) -> str:
+    """Launch one autonomous benchmark cell. Fire-and-forget: returns as soon as
+    spawn accepts the launch (no --wait-for-ssh), because the whole job runs from
+    cell_runner.sh via --command and reports to S3. Returns the instance name.
 
+    Teardown guarantees (no run can strand a billing instance):
+      * completion file   cell_runner.sh touches it on success -> --on-complete
+                          terminate (default; bounded cost).
+      * `--terminate-on-error`  reaps if spored/bootstrap fails.
+      * `--ttl` / `--idle-timeout`  backstops.
 
-def spawn(instance_type: str, ttl_minutes: int, idle_minutes: int,
-          region: str, name: str, on_complete: str = "terminate",
-          pre_stop: str | None = None, ami: str | None = None,
-          iam_policy_file: str | None = None) -> str:
-    """Launch a bare on-demand instance with auto-termination. Returns the name,
-    which is the handle spawn uses for connect/terminate. GROMACS itself arrives
-    later via pull()/run_container(); nothing GROMACS-specific is baked here.
-
-    Three independent teardown guarantees, so no run can strand a billing
-    instance:
-      * `--ttl`           hard upper bound on lifetime
-      * `--idle-timeout`  reap if nothing is running
-      * completion file   mdrun_wrapper.sh (in the container) writes the sentinel
-                          to the bind-mounted host path when replicates finish;
-                          spawn then runs `--on-complete` (default `terminate` --
-                          bounded cost; `stop` keeps billing EBS, per spawn).
-    `--terminate-on-error` also reaps the instance if spored never comes up.
-    Optional `--pre-stop` runs on the box before teardown (e.g. an
-    `aws s3 sync` of results), the robust alternative/backstop to fetch().
-
-    AMI is auto-detected (omit `--ami`); pass `ami` only to pin one. Timing runs
-    are on-demand (no --spot) on purpose. Syntax verified via `spawn launch
-    --help`.
-    # SPORE: not yet confirmed end-to-end against a live launch (would spend).
+    The --command curls cell_runner.sh from the public repo and runs it with the
+    cell's env inlined (image, region, gpu, results prefix, and the wrapper's
+    TPR/NSTEPS/... vars). AMI auto-detected. On-demand only (timing integrity).
     """
+    exports = {
+        "IMAGE": image, "AWS_REGION": region, "GPU": "1" if gpu else "0",
+        "RESULTS_S3": results_s3, "WRAPPER_URL": WRAPPER_URL,
+        "COMPLETION_FILE": COMPLETION_FILE,
+        **env,   # TPR_SRC, NSTEPS, MDRUN_FLAGS, MIG_*, MPS_PROCS, REPLICATES
+    }
+    export_line = " ".join(f"{k}={shlex.quote(v)}" for k, v in exports.items())
+    command = (f"export {export_line}; "
+               f"curl -fsSL {shlex.quote(RUNNER_URL)} | bash")
     cmd = ["spawn", "launch", name,
            "--instance-type", instance_type,
            "--region", region,
            "--ttl", f"{ttl_minutes}m",
            "--idle-timeout", f"{idle_minutes}m",
            "--completion-file", COMPLETION_FILE,
-           "--on-complete", on_complete,
+           "--on-complete", "terminate",
            "--terminate-on-error",
-           "--wait-for-ssh",
+           "--command", command,
            "-o", "json"]
-    if ami:
-        cmd += ["--ami", ami]
-    if pre_stop:
-        cmd += ["--pre-stop", pre_stop]
     if iam_policy_file:
-        # Instance role: ECR pull + S3 read/write on the bench bucket, so the
-        # in-container `aws s3 cp` (tpr) and the docker ECR pull both work.
+        # Instance role: ECR pull + S3 read/write on the bench bucket.
         cmd += ["--iam-policy-file", iam_policy_file]
     _run(cmd)
-    # Addressed by name from here on; no id parsing needed.
     return name
-
-
-def ensure_runtime(handle: str, gpu: bool) -> None:
-    """Install the container runtime on the bare AL2023 instance. Verified in
-    Phase 1: the auto-detected AL2023 AMI does NOT ship Docker, so pull/run would
-    fail without this. For GPU cells also install the nvidia-container-toolkit so
-    `docker run --gpus all` works. Idempotent (dnf install is a no-op if present).
-    Part of provisioning, so its wall-clock lands in provision_s.
-    """
-    steps = [
-        "sudo dnf install -y -q docker",
-        "sudo systemctl enable --now docker",
-    ]
-    if gpu:
-        # nvidia-container-toolkit repo + install, then wire it into docker.
-        steps += [
-            "curl -fsSL https://nvidia.github.io/libnvidia-container/stable/rpm/nvidia-container-toolkit.repo "
-            "| sudo tee /etc/yum.repos.d/nvidia-container-toolkit.repo >/dev/null",
-            "sudo dnf install -y -q nvidia-container-toolkit",
-            "sudo nvidia-ctk runtime configure --runtime=docker",
-            "sudo systemctl restart docker",
-        ]
-    run_remote(handle, " && ".join(steps))
-
-
-def pull(handle: str, image: str, region: str, gpu: bool = False) -> None:
-    """Ensure the runtime, then ECR-login and docker-pull the image. This is the
-    provisioning step -- its wall-clock belongs in `provision_s` (boot + runtime
-    install + pull + stage), NOT `runtime_s`, so the timing split stays honest.
-    Separated from run_container() precisely so the caller times it on the
-    provision side.
-    """
-    ensure_runtime(handle, gpu)
-    reg = _registry(image)
-    login = (f"aws ecr get-login-password --region {shlex.quote(region)} "
-             f"| sudo docker login --username AWS --password-stdin {shlex.quote(reg)}")
-    # Stage the current wrapper alongside the pull (both are provisioning). Fetch
-    # from the public repo so a wrapper edit takes effect without rebuilding the
-    # image.
-    stage_wrapper = (f"mkdir -p {HOST_WORK} && "
-                     f"curl -fsSL {shlex.quote(WRAPPER_URL)} -o {HOST_WRAPPER} && "
-                     f"chmod +x {HOST_WRAPPER}")
-    run_remote(handle, f"{login} && sudo docker pull {shlex.quote(image)} && {stage_wrapper}")
-
-
-def run_container(handle: str, image: str, env: dict[str, str], gpu: bool) -> str:
-    """docker-run the benchmark image; the entrypoint is mdrun_wrapper.sh. This
-    is the timed workload -- its wall-clock is `runtime_s`. The host work dir is
-    bind-mounted so md*.log and the completion sentinel are visible to spawn's
-    completion watcher and to fetch(). ns/day itself comes from GROMACS's own
-    -resethway steady-state timers in the logs, not this wall-clock, so pull/boot
-    overhead never contaminates the performance number.
-    # GPU cells need the nvidia-container-toolkit, installed by ensure_runtime().
-    """
-    # WORK: container-side work dir. COMPLETION_FILE: point the wrapper's sentinel
-    # at the bind-mounted dir so it appears on the host at COMPLETION_FILE (which
-    # is what spawn --completion-file watches).
-    ctr_env = {**env, "WORK": CTR_WORK,
-               "COMPLETION_FILE": f"{CTR_WORK}/SPAWN_COMPLETE"}
-    docker_env = " ".join(f"-e {k}={shlex.quote(v)}" for k, v in ctr_env.items())
-    gpu_flag = "--gpus all " if gpu else ""
-    # --privileged: MIG/MPS setup in the wrapper needs nvidia-smi -mig / control.
-    priv = "--privileged " if gpu else ""
-    # Mount the staged wrapper over the image's baked copy so the running
-    # orchestration always matches the repo, no image rebuild needed.
-    cmd = (f"mkdir -p {HOST_WORK} && sudo docker run --rm {gpu_flag}{priv}"
-           f"-v {HOST_WORK}:{CTR_WORK} -v {HOST_WRAPPER}:{CTR_WRAPPER}:ro "
-           f"{docker_env} {shlex.quote(image)} bash {CTR_WRAPPER}")
-    return run_remote(handle, cmd)
-
-
-def run_remote(handle: str, command: str, env: dict[str, str] | None = None) -> str:
-    """Execute a shell command on the instance, return its stdout.
-
-    `spawn connect <name> -- <command>...` takes the command as VARIADIC args,
-    which SSH re-splits -- so `-- bash -lc "cmd with && and quotes"` arrives
-    mangled (bash: -c: option requires an argument). Feed the script over stdin
-    to `bash -s` instead: the payload never rides on argv, so quoting/&&/pipes
-    survive intact. (Verified against the live instances during Phase 1.)
-    """
-    env = env or {}
-    env_prefix = " ".join(f"{k}={shlex.quote(v)}" for k, v in env.items())
-    full = f"{env_prefix} {command}".strip()
-    if DRY_RUN:
-        print(f"[dry-run] spawn connect {handle} -- bash -s <<< {shlex.quote(full)}")
-        return ""
-    proc = subprocess.run(["spawn", "connect", handle, "--", "bash", "-s"],
-                          input=full, check=True, capture_output=True, text=True)
-    return proc.stdout
-
-
-def fetch(handle: str, remote_path: str, local_path: str) -> None:
-    """Copy file(s) off the instance.
-
-    spawn has no `cp`/`scp` subcommand, so we stream a tar of the matched files
-    through `spawn connect` and unpack locally. `remote_path` may be a glob.
-    sudo: the container runs as root, so the bind-mounted logs are root-owned.
-    # SPORE: unconfirmed until the Phase-1 live cell. If this proves flaky, the
-    # robust alternative is to have mdrun_wrapper.sh push logs to S3 and fetch
-    # from there (the instance already has awscli + the configured bucket).
-    """
-    remote = f"sudo tar czf - {remote_path} 2>/dev/null || true"
-    if DRY_RUN:
-        print(f"[dry-run] spawn connect {handle} -- bash -s <<< {shlex.quote(remote)} "
-              f"| tar xzf - -C {local_path}")
-        return
-    os.makedirs(local_path, exist_ok=True)
-    # Script over stdin (bash -s) to dodge connect's argv re-splitting; tar
-    # binary comes back on stdout, so no text mode here.
-    proc = subprocess.run(["spawn", "connect", handle, "--", "bash", "-s"],
-                          input=remote.encode(), check=True, capture_output=True)
-    subprocess.run(["tar", "xzf", "-", "-C", local_path],
-                   input=proc.stdout, check=True)
 
 
 def fetch_s3(s3_prefix: str, local_path: str) -> None:

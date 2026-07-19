@@ -180,48 +180,33 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
             t.wait_samples = samples + [t.wait_s]
             t.summarize()
 
-    else:  # aws via spore
+    else:  # aws: autonomous cell -- launch, then poll S3 (no held SSH)
         prices = spore.truffle_price(inst["type"], cfg["region"])
         od, spot = prices.on_demand_hr, prices.spot_hr
-        max_wait = float(cfg.get("capacity_max_wait_minutes", 30)) * 60
         image = cfg["images"][inst["arch"]]
         gpu = inst["class"] == "gpu"
-        if cfg.get("use_lagotto", True):
-            # Watch for capacity rather than discovering it by failing.
-            handle, acquire_s, seen_s = providers.lagotto_acquire(
-                inst["type"], cfg["region"], max_wait,
-                cfg["ttl_minutes"], cfg["idle_minutes"], name,
-                iam_policy_file=IAM_POLICY)
-            method = "lagotto"
-        else:
-            handle, acquire_s = providers.cloud_acquire(
-                lambda: spore.spawn(inst["type"], cfg["ttl_minutes"],
-                                    cfg["idle_minutes"], cfg["region"], name,
-                                    iam_policy_file=IAM_POLICY),
-                max_wait_s=max_wait)
-            seen_s, method = acquire_s, "retry"
-        granted = time.time()
-        try:
-            # provision = boot + runtime install + ECR login + pull + stage.
-            # Timed as provision_s, kept out of runtime_s so the split stays honest.
-            spore.pull(handle, image, cfg["region"], gpu=gpu)
-            ready = time.time()
-            # runtime = the docker run of the wrapper (the timed GROMACS work).
-            spore.run_container(handle, image, env, gpu)
-            done = time.time()
-            # Results were pushed to S3 by the wrapper before the sentinel, so
-            # read them from there -- durable even if --on-complete already
-            # terminated the box (avoids the fetch-vs-teardown race).
-            spore.fetch_s3(results_s3(cfg, name), str(cell_dir / "logs") + "/")
-        finally:
-            spore.terminate(handle)
-        # Cloud queues too: acquire_s is contended-capacity wait, the direct
-        # analogue of scheduler queue delay. provision_s is boot + pull + stage.
-        t = providers.Timing(runtime_s=done - ready,
+        rs3 = results_s3(cfg, name)
+        launched = time.time()
+        spore.launch_cell(inst["type"], image, env, gpu,
+                          cfg["ttl_minutes"], cfg["idle_minutes"],
+                          cfg["region"], name, rs3, iam_policy_file=IAM_POLICY)
+        # The cell reports done by writing timing.json to its S3 prefix. Poll for
+        # it; the deadline is the ttl (a cell that never reports is a failure).
+        deadline = launched + cfg["ttl_minutes"] * 60
+        timing = providers.await_cell_timing(rs3, deadline)
+        if timing is None:
+            raise RuntimeError(f"cell {name} did not report within TTL")
+        spore.fetch_s3(rs3, str(cell_dir / "logs") + "/")
+        # Split the timing. provision_s / runtime_s come from the instance's own
+        # clock (timing.json) -- more accurate than coordinator wall-clock and no
+        # SSH. acquire_s (capacity wait) = launch -> boot, the queue analogue.
+        boot_wall = timing["boot_epoch"]
+        acquire_s = max(0.0, boot_wall - launched)
+        t = providers.Timing(runtime_s=float(timing["runtime_s"]),
                              acquire_s=acquire_s,
-                             capacity_seen_s=seen_s,
-                             acquire_method=method,
-                             provision_s=ready - granted)
+                             capacity_seen_s=acquire_s,
+                             acquire_method="autonomous",
+                             provision_s=float(timing["provision_s"]))
         samples = (queue_samples or {}).get(inst["id"], [])
         t.wait_samples = (samples or []) + [acquire_s + t.provision_s]
         t.summarize()
@@ -364,16 +349,12 @@ def main() -> int:
             if prov == "onprem":
                 queue_samples[inst["id"]] = providers.onprem_probe_queue(inst, n)
             elif prov == "aws":
-                if cfg.get("use_lagotto", True):
-                    # Watching is free, so a distribution costs nothing.
-                    queue_samples[inst["id"]] = providers.lagotto_probe(
-                        inst["type"], cfg["region"], n, max_wait)
-                else:
-                    queue_samples[inst["id"]] = providers.cloud_probe_capacity(
-                        inst["type"], cfg["region"], n, max_wait,
-                        lambda i=inst: (lambda: spore.spawn(
-                            i["type"], cfg["ttl_minutes"],
-                            cfg["idle_minutes"], cfg["region"], f"probe-{i['id']}")))
+                # Watching (lagotto) is the only cloud probe now -- it costs
+                # nothing and launches nothing. The old retry-probe launched
+                # throwaway instances via the retired spore.spawn; autonomous
+                # cells + --no-probe made it obsolete.
+                queue_samples[inst["id"]] = providers.lagotto_probe(
+                    inst["type"], cfg["region"], n, max_wait)
         except Exception as e:
             print(f"WARN probe for {inst['id']} failed, continuing without its "
                   f"wait distribution: {str(e)[:120]}", file=sys.stderr)

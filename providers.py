@@ -36,6 +36,29 @@ from datetime import UTC, datetime
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
 
 
+def await_cell_timing(results_s3: str, deadline: float,
+                      poll_s: int = 20) -> dict | None:
+    """Poll S3 for an autonomous cell's timing.json (which it writes last, after
+    logs, on success). Returns the parsed dict when it appears, or None if the
+    deadline passes -- the coordinator's signal that the cell completed, without
+    holding any SSH session to the instance.
+    """
+    if DRY_RUN:
+        return {"boot_epoch": 0, "ready_epoch": 0, "done_epoch": 0,
+                "provision_s": 0.0, "runtime_s": 0.0}
+    key = f"{results_s3}/timing.json"
+    while time.time() < deadline:
+        out = subprocess.run(["aws", "s3", "cp", key, "-"],
+                             capture_output=True, text=True)
+        if out.returncode == 0 and out.stdout.strip():
+            try:
+                return json.loads(out.stdout)
+            except json.JSONDecodeError:
+                pass   # partial upload; poll again
+        time.sleep(poll_s)
+    return None
+
+
 class CapacityUnavailable(RuntimeError):
     """Resource never granted within the allowed window. Same outcome class on
     either side of the fence: infeasible:capacity."""
