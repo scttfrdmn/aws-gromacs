@@ -174,10 +174,10 @@ instances:
     type: m9g.24xlarge         # expect Graviton5 (current gen, 2026)
     class: cpu
     arch: arm_neon
-    # spawn auto-AMI mis-detects m9g as x86_64 (spore-host/spawn#410) -- pin an
-    # arm64 AL2023 AMI. Region-specific, so it comes from the env like GPU_AMI;
-    # export ARM64_AMI before an m9g run (AL2023 arm64 for your region).
-    ami: ${ARM64_AMI}
+    # spawn <=0.82 auto-AMI mis-detected m9g as x86_64 (spore-host/spawn#410,
+    # fixed in 0.83.1: arch now derived from DescribeInstanceTypes). Needs spawn
+    # >=0.83.1. If an even newer arm64 family regresses this, pin an arm64
+    # AL2023 AMI here via `ami: ${ARM64_AMI}` (run_matrix threads inst['ami']).
 
   - id: g6                     # L4
     provider: aws
