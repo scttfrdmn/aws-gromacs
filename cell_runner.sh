@@ -28,6 +28,18 @@ REGISTRY="${IMAGE%%/*}"
 mkdir -p "$HOST_WORK"
 TIMING="$HOST_WORK/timing.json"
 
+# Capture the runner's own output and push it to S3 on exit -- success AND
+# failure. If the failure is in setup (docker/toolkit/pull) rather than mdrun,
+# the wrapper never runs and its trap never fires, so this runner log is the
+# only diagnosis. Failures are then debuggable from S3 with no live-instance
+# race. Does NOT touch the sentinel (success-only, at the end).
+RUNNER_LOG="$HOST_WORK/cell_runner.log"
+exec > >(tee -a "$RUNNER_LOG") 2>&1
+_push_runner_log() {
+  aws s3 cp "$RUNNER_LOG" "$RESULTS_S3/cell_runner.log" --only-show-errors 2>/dev/null || true
+}
+trap _push_runner_log EXIT
+
 # Epoch helpers so the coordinator can reconstruct the wait/runtime split from
 # the instance itself (more accurate than coordinator wall-clock, and needs no
 # SSH). boot = when this runner started (post spored/SSH-ready).

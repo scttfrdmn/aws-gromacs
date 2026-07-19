@@ -31,6 +31,20 @@ MPS_PROCS="${MPS_PROCS:-0}"
 REPLICATES="${REPLICATES:-3}"
 mkdir -p "$WORK"; cd "$WORK"
 
+# Always push whatever logs exist to S3 -- on SUCCESS AND ON FAILURE. Without
+# this, a failed mdrun (set -e) aborts before the success-path S3 push, so the
+# failing md_rep*.log with the GROMACS error never surfaces and every failure
+# needs a live-instance race to diagnose. The trap makes failures debuggable
+# straight from S3. It does NOT touch the completion sentinel -- that stays
+# success-only, so a failed cell is not reaped as "done".
+_push_logs() {
+  [ -n "${RESULTS_S3:-}" ] || return 0
+  mkdir -p "$WORK/logs"
+  find "$WORK" -name 'md*.log' -not -path "$WORK/logs/*" -exec cp {} "$WORK/logs/" \; 2>/dev/null || true
+  aws s3 cp "$WORK/logs/" "$RESULTS_S3/" --recursive --only-show-errors 2>/dev/null || true
+}
+trap _push_logs EXIT
+
 case "$TPR_SRC" in
   s3://*) aws s3 cp "$TPR_SRC" ./run.tpr ;;
   *)      cp "$TPR_SRC" ./run.tpr ;;
@@ -95,19 +109,9 @@ else
   for ((r=0; r<REPLICATES; r++)); do run_single "$r"; done
 fi
 
-# Collect logs to a flat location for retrieval.
-mkdir -p "$WORK/logs"
-find "$WORK" -name 'md*.log' -not -path "$WORK/logs/*" -exec cp {} "$WORK/logs/" \;
-
-# Push logs to S3 BEFORE the sentinel. The sentinel triggers spawn's
-# --on-complete teardown, which otherwise races (and beats) the coordinator's
-# fetch -- so results must be durable in S3 first. The coordinator then reads
-# them from S3, not off the (possibly already-terminated) instance.
-if [ -n "${RESULTS_S3:-}" ]; then
-  aws s3 cp "$WORK/logs/" "$RESULTS_S3/" --recursive --only-show-errors
-fi
-
-# Signal completion so spawn tears the instance down (--on-complete). Written
-# last, only on the success path -- `set -e` above aborts before here on any
-# mdrun failure, leaving no sentinel so the box is not reaped as "done".
+# Success path. Logs are pushed to S3 by the EXIT trap (_push_logs) -- which
+# runs here on success and also on any earlier failure. Push once now so results
+# are durable BEFORE the sentinel triggers spawn's --on-complete teardown (which
+# would otherwise race the coordinator), then signal completion.
+_push_logs
 touch "$COMPLETION_FILE"
