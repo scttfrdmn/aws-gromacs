@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import pathlib
 import re
@@ -47,7 +48,13 @@ FIELDS = ["workload", "atoms", "instance", "class", "config", "provider",
           "provision_s",
           "wait_s", "wait_s_best", "wait_s_p50", "wait_s_p90",
           "time_to_result_s", "time_to_result_best_s",
-          "od_hr", "spot_hr", "ns_per_dollar_od", "ns_per_dollar_spot"]
+          "od_hr", "spot_hr", "ns_per_dollar_od", "ns_per_dollar_spot",
+          # GPU cells: REAL device utilization from DCGM (SM-active = chip
+          # occupancy, DRAM-active = mem-bandwidth), not nvidia-smi's time-based
+          # proxy. Blank for CPU cells. Powers D3 (right-size) + the thesis's
+          # under-utilization argument with a measured number.
+          "gpu_sm_active_mean", "gpu_sm_active_max",
+          "gpu_dram_active_mean", "gpu_power_w_mean", "gpu_mem_used_mib_max"]
 
 
 def blank_row(wl, inst, cf, outcome, reason):
@@ -174,6 +181,7 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
     (cell_dir / "logs").mkdir(parents=True, exist_ok=True)
     prov = inst.get("provider", "aws")
     env = env_for(cfg, wl, cf, prov != "aws", name)
+    gpu_util: dict = {}   # populated for GPU cells from DCGM (gpuutil.json)
 
     if prov == "local":
         od = spot = float(inst.get("amortized_hr", 0.0))
@@ -211,6 +219,13 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
         if timing is None:
             raise RuntimeError(f"cell {name} did not report within TTL")
         spore.fetch_s3(rs3, str(cell_dir / "logs") + "/")
+        # GPU cells wrote gpuutil.json (DCGM summary) alongside the logs.
+        gutil_path = cell_dir / "logs" / "gpuutil.json"
+        if gpu and gutil_path.exists():
+            try:
+                gpu_util = json.loads(gutil_path.read_text())
+            except (json.JSONDecodeError, OSError):
+                gpu_util = {}
         # Split the timing. provision_s / runtime_s come from the instance's own
         # clock (timing.json) -- more accurate than coordinator wall-clock and no
         # SSH. acquire_s (capacity wait) = launch -> boot, the queue analogue.
@@ -262,6 +277,12 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
         "od_hr": od, "spot_hr": spot,
         "ns_per_dollar_od": round(ns_per_dollar(total, od), 2),
         "ns_per_dollar_spot": round(ns_per_dollar(total, spot), 2),
+        # DCGM GPU utilization (blank for non-GPU cells).
+        "gpu_sm_active_mean": gpu_util.get("sm_active_mean", ""),
+        "gpu_sm_active_max": gpu_util.get("sm_active_max", ""),
+        "gpu_dram_active_mean": gpu_util.get("dram_active_mean", ""),
+        "gpu_power_w_mean": gpu_util.get("power_w_mean", ""),
+        "gpu_mem_used_mib_max": gpu_util.get("mem_used_mib_max", ""),
     }
 
 

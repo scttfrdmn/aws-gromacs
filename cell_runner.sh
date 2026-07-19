@@ -56,6 +56,22 @@ curl -fsSL "$WRAPPER_URL" -o "$HOST_WORK/mdrun_wrapper.sh"
 chmod +x "$HOST_WORK/mdrun_wrapper.sh"
 T_READY=$(now)          # docker + image + wrapper ready == end of provisioning
 
+# GPU cells: sample REAL device utilization during the timed run via DCGM (on
+# the DLAMI already). NOT nvidia-smi's "utilization.gpu", which is just percent-
+# of-time-a-kernel-ran and reports ~100% even when a kernel touches a few SMs --
+# useless for the "is the card actually filled?" question that drives D3 and the
+# thesis's "15% utilization" pathology. DCGM profiling fields measure the chip:
+#   1002 = PROF_SM_ACTIVE   (fraction of SMs active -- true occupancy)
+#   1005 = PROF_DRAM_ACTIVE (memory-bandwidth utilization -- the bandwidth story)
+#   155  = power draw (W),  252 = memory used (MiB)
+# Sampled 1/s to a CSV for the duration of the run, then summarized to gpuutil.json.
+GPU_SAMPLE=""
+if [ "$GPU" = "1" ] && command -v dcgmi >/dev/null; then
+  GPU_SAMPLE="$HOST_WORK/gpu_samples.csv"
+  ( sudo dcgmi dmon -e 1002,1005,155,252 -d 1000 2>/dev/null | tee "$GPU_SAMPLE" >/dev/null ) &
+  DCGM_PID=$!
+fi
+
 echo "== run wrapper (timed workload) =="
 gpu_args=()
 [ "$GPU" = "1" ] && gpu_args=(--gpus all --privileged)
@@ -72,6 +88,38 @@ sudo docker run --rm "${gpu_args[@]}" \
   -e "RESULTS_S3=$RESULTS_S3" \
   "$IMAGE" bash "$CTR_WRAPPER"
 T_DONE=$(now)
+
+# Stop the sampler and summarize (mean/max SM-active, DRAM-active, power, mem).
+if [ -n "$GPU_SAMPLE" ]; then
+  sudo kill "$DCGM_PID" 2>/dev/null || true
+  python3 - "$GPU_SAMPLE" "$HOST_WORK/gpuutil.json" <<'PY' || true
+import sys, json, statistics
+rows = []
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        p = line.split()
+        # dcgmi dmon rows: "GPU <id> <smact> <drama> <power> <memused>"; skip headers
+        if len(p) >= 6 and p[0] == "GPU":
+            try:
+                rows.append([float(p[2]), float(p[3]), float(p[4]), float(p[5])])
+            except ValueError:
+                pass
+def col(i):
+    vals = [r[i] for r in rows]
+    return vals or [0.0]
+out = {
+    "samples": len(rows),
+    "sm_active_mean": round(statistics.mean(col(0)), 4),
+    "sm_active_max": round(max(col(0)), 4),
+    "dram_active_mean": round(statistics.mean(col(1)), 4),
+    "dram_active_max": round(max(col(1)), 4),
+    "power_w_mean": round(statistics.mean(col(2)), 1),
+    "mem_used_mib_max": round(max(col(3)), 0),
+}
+json.dump(out, open(sys.argv[2], "w"))
+PY
+  aws s3 cp "$HOST_WORK/gpuutil.json" "$RESULTS_S3/gpuutil.json" --only-show-errors || true
+fi
 
 echo "== write timing.json + push to S3 =="
 # provision_s = boot->ready (install+pull+stage); runtime_s = the docker run.
