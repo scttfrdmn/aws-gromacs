@@ -10,6 +10,61 @@ only via the ns/$ spot column). GROMACS 2025.2.
 
 ---
 
+## F2 — Neither generation nor $/hr predicts CPU throughput; memory bandwidth does (Phase 6)
+
+**Systems:** benchMEM (82k). Intel generational ladder c5→c8i, all `.24xlarge`
+(96 vCPU). ns/day is rep0 pending 3-replicate CIs; the pattern is far larger than
+run-to-run noise. Bandwidth = measured STREAM triad (`preprocess/sysinfo.sh`).
+
+| gen | µarch (year) | $/hr OD | STREAM GB/s | NUMA | ns/day @96c |
+|-----|--------------|---------|-------------|------|-------------|
+| c5  | Cascade Lake (2019) | 4.08 | 161 | 2 | 80 (partial) |
+| c6i | Ice Lake (2021)     | 4.08 | 272 | 2 | 141 |
+| c7i | Sapphire Rapids (2023) | 4.28 | 186 | **1** | 137 |
+| c8i | Granite Rapids (2025) | 4.50 | 355 | 2 | 174 |
+
+**Three measured findings:**
+
+1. **Throughput tracks memory bandwidth, not generation or price.** ns/day rises
+   with STREAM GB/s (161→272→355 → 80→141→174), not with generation number or
+   $/hr (which rise only ~10% c5→c8i). MD on CPU is bandwidth-bound; the menu
+   number ($/hr) and the spec-sheet generation both fail to predict $/result.
+
+2. **The generational order INVERTS at full width — and bandwidth explains it.**
+   At 96 cores c7i (137) sits *below* c6i (141), breaking the c5<c6i<c7i<c8i
+   staircase. Cause: AWS provisions c7i.24xlarge as a **single NUMA node** with
+   the lowest bandwidth of the modern three (186 GB/s, barely above 2019's c5).
+   The core-count sweep confirms it: at 8/16/32/48 cores c7i is *faster* than c6i
+   (true per-core IPC), but its bandwidth ceiling drops it below c6i once the
+   cores are all fighting for memory. The full-width number lies; the curve
+   tells the truth.
+
+3. **Every generation collapses at 64 cores — a domain-decomposition artifact.**
+   Core-count sweep (ns/day vs -nt), benchMEM:
+
+   | cores | c6i | c7i | c8i |
+   |-------|-----|-----|-----|
+   | 32 | 61 | 72 | 97 |
+   | 48 | 108 | 123 | **162** |
+   | 64 | 81 | 82 | **104** ↓ |
+   | 96 | 141 | 137 | 174 |
+
+   Every chip is *slower at 64 cores than at 48* — GROMACS's 3D domain
+   decomposition / PP-PME rank split factorizes badly at 64, falling back to a
+   poor grid. The naive "more cores = faster" and "use the whole box" instincts
+   both fail: 48 cores beats 64 on every generation, and the best core count is
+   not the maximum.
+
+*If you want CPU throughput: buy bandwidth, not the newest generation or the most
+cores. Check the NUMA layout your cloud vendor actually gives you, and don't
+assume filling the box is optimal.* (Phase 6)
+
+**Caveat:** rep0 values shown; 3-replicate CIs to be folded in. c5 high-core
+points still landing (oldest chip, slowest cells). The 48-core monotonic
+staircase (c5 92 < c6i 108 < c7i 123 < c8i 162) is the clean per-core ordering.
+
+---
+
 ## F1 — For a small system, the CPU beats the GPU on cost, throughput, AND wait (D3)
 
 **System:** benchMEM (82k atoms, membrane protein — a *small* MD system).
