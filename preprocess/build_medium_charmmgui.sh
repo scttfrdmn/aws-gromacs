@@ -48,7 +48,9 @@ ls
 run_mdp() {  # $1 = mdp basename (no ext), $2 = input gro, $3 = optional -t cpt
   local mdp="$1" cin="$2" cpt="${3:-}"
   local ndx=(); [ -f index.ndx ] && ndx=(-n index.ndx)
-  local tflag=(); [ -n "$cpt" ] && tflag=(-t "$cpt")
+  # -t only if the checkpoint actually exists: steep minimization (step6.0)
+  # writes no .cpt, so the first equilibration step must grompp without -t.
+  local tflag=(); [ -n "$cpt" ] && [ -f "$cpt" ] && tflag=(-t "$cpt")
   "$GMX" grompp -f "${mdp}.mdp" -o "${mdp}.tpr" -c "$cin" -r "$cin" \
     "${tflag[@]}" -p topol.top "${ndx[@]}" -maxwarn 5
   "$GMX" mdrun -deffnm "$mdp" -nb "$MDRUN_NB"
@@ -73,33 +75,44 @@ echo "== grompp BASE production tpr (CHARMM-GUI step7, 2 fs) =="
 ATOMS=$("$GMX" dump -s "${SYS}.tpr" 2>/dev/null | grep -m1 "natoms" | grep -oE '[0-9]+' | head -1)
 echo "== medium system: ${ATOMS} atoms =="
 
-echo "== HMR: repartition hydrogen masses in the topology (ParmEd) =="
+# Upload the BASE tpr now, before the HMR step -- the base medium system is the
+# priority; HMR (D1) is a bonus. If ParmEd/HMR fails, we still keep the base.
+echo "== upload BASE tpr =="
+aws s3 cp "${SYS}.tpr" "$TPR_S3/${SYS}.tpr" --only-show-errors
+
+# HMR is best-effort: a ParmEd hiccup on the CHARMM-GUI topology must not abort
+# the build or lose the base tpr. Run the whole HMR block in a subshell that
+# can fail without killing the script (set +e locally).
 # HMR is NOT an mdp/grompp flag -- it rewrites atom masses (H x ~3-4, subtracted
-# from the bonded heavy atom) so a 4 fs step is stable. pdb2gmx -heavyh does this
-# at build time, but the CHARMM-GUI topology already exists, so repartition it
-# post-hoc with ParmEd's HMassRepartition (the standard tool; pure Python).
-pip install --quiet parmed 2>/dev/null || sudo pip install --quiet parmed
-python3 - "$([ -f index.ndx ] && echo index.ndx)" <<'PY'
+# from the bonded heavy atom) so a 4 fs step is stable. The CHARMM-GUI topology
+# already exists, so repartition it post-hoc with ParmEd's HMassRepartition (the
+# standard tool). Best-effort: the whole block runs in a subshell that may fail
+# without aborting the script or losing the already-uploaded base tpr.
+echo "== HMR: repartition hydrogen masses (ParmEd), best-effort =="
+if (
+  set -e
+  pip install --quiet parmed 2>/dev/null || sudo pip install --quiet parmed
+  python3 <<'PY'
 import parmed as pmd
 top = pmd.load_file("topol.top", xyz=None)
 pmd.tools.HMassRepartition(top).execute()   # default dmass=3.024, standard HMR
 top.save("topol_hmr.top", overwrite=True)
 print("wrote topol_hmr.top (H masses repartitioned)")
 PY
-echo "== derive HMR mdp from CHARMM-GUI's own production mdp (dt 0.002 -> 0.004) =="
-# Reuse step7_production.mdp verbatim except the timestep, so the HMR and base
-# runs differ ONLY by dt + repartitioned masses -- a clean D1 comparison. Halve
-# nsteps too (4 fs covers the same time in half the steps); the harness overrides
-# -nsteps anyway, so this only affects the nominal length.
-sed -E 's/^([[:space:]]*dt[[:space:]]*=).*/\1 0.004/' step7_production.mdp > md-hmr-charmm.mdp
-grep -qiE '^[[:space:]]*dt' md-hmr-charmm.mdp || echo "dt = 0.004" >> md-hmr-charmm.mdp
-echo "== grompp HMR production tpr (4 fs, repartitioned masses) =="
-"$GMX" grompp -f md-hmr-charmm.mdp -o "${SYS}-hmr.tpr" -c "${prev}.gro" -t "${prev}.cpt" \
-  -p topol_hmr.top "${NDX[@]}" -maxwarn 5
+  # Reuse step7_production.mdp verbatim except the timestep, so HMR and base
+  # differ ONLY by dt + repartitioned masses -- a clean D1 comparison.
+  sed -E 's/^([[:space:]]*dt[[:space:]]*=).*/\1 0.004/' step7_production.mdp > md-hmr-charmm.mdp
+  grep -qiE '^[[:space:]]*dt' md-hmr-charmm.mdp || echo "dt = 0.004" >> md-hmr-charmm.mdp
+  "$GMX" grompp -f md-hmr-charmm.mdp -o "${SYS}-hmr.tpr" -c "${prev}.gro" -t "${prev}.cpt" \
+    -p topol_hmr.top "${NDX[@]}" -maxwarn 5
+  aws s3 cp "${SYS}-hmr.tpr" "$TPR_S3/${SYS}-hmr.tpr" --only-show-errors
+); then
+  echo "== HMR tpr staged: ${SYS}-hmr.tpr =="
+else
+  echo "== WARN: HMR step failed (ParmEd/grompp) -- base tpr is staged; D1 HMR"
+  echo "==       variant not produced. Base medium still usable. See log. =="
+fi
 
-echo "== upload tprs =="
-aws s3 cp "${SYS}.tpr"     "$TPR_S3/${SYS}.tpr"     --only-show-errors
-aws s3 cp "${SYS}-hmr.tpr" "$TPR_S3/${SYS}-hmr.tpr" --only-show-errors
-echo "== done: ${SYS}.tpr (${ATOMS} atoms) + ${SYS}-hmr.tpr staged =="
+echo "== done: ${SYS}.tpr (${ATOMS} atoms) staged =="
 
 touch "$COMPLETION_FILE"
