@@ -87,6 +87,26 @@ instances:
     class: cpu
     arch: intel
 
+  # --- Phase 6: Intel generational ladder (c5->c8i). Same intel AVX-512 image
+  # (Intel has had AVX-512 since Skylake/c5). Run via
+  # `--instances c5,c6i,c7i,c8i` to show $/hr ranking != $/result ranking as the
+  # generations climb. Prune to these rungs; not part of the default sweep.
+  - id: c5
+    provider: aws
+    type: c5.24xlarge          # Skylake-SP (2017)
+    class: cpu
+    arch: intel
+  - id: c6i
+    provider: aws
+    type: c6i.24xlarge         # Ice Lake (2021)
+    class: cpu
+    arch: intel
+  - id: c7i
+    provider: aws
+    type: c7i.24xlarge         # Sapphire Rapids (2023)
+    class: cpu
+    arch: intel
+
   # AMD EPYC Turin (Zen 5). 4.5 GHz, 33% more memory bandwidth than c7a --
   # the bandwidth number is the one that matters for MD, not the clock.
   - id: c8a
