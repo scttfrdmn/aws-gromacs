@@ -46,17 +46,27 @@ triad bandwidth (`preprocess/sysinfo.sh`).
    above 2019's c5). Its cores starve for memory before c6i's (272 GB/s) do. The
    full-width number hides the per-core truth; the curve reveals it.
 
-   **On the LARGE system (benchRIB, 2M atoms, 96 cores) the bandwidth inversion
-   is unambiguous** — CIs razor-tight and non-overlapping:
-   c7i **8.91 ± 0.02** < c6i **9.62 ± 0.01** < c8i **12.04 ± 0.10** ns/day.
-   Ordering follows STREAM bandwidth exactly (186 < 272 < 355), NOT generation
-   number: the 2023 c7i is genuinely, measurably slower than the 2021 c6i on a
-   memory-bound 2M-atom system, because AWS gives c7i.24xlarge less bandwidth.
+   **On the LARGE system (benchRIB, 2M atoms, 96 cores) the bandwidth ordering
+   is unambiguous** — full generational ladder, CIs non-overlapping:
+
+   | gen | STREAM GB/s | ns/day (n=3) |
+   |-----|-------------|--------------|
+   | c5  | 161 | 5.96 ± 0.69 (wide, 12%) |
+   | c7i | 186 | 8.91 ± 0.02 |
+   | c6i | 272 | 9.62 ± 0.01 |
+   | c8i | 355 | 12.04 ± 0.10 |
+
+   ns/day follows STREAM bandwidth **exactly** (161<186<272<355 →
+   5.96<8.91<9.62<12.04), NOT generation number: the 2023 c7i is genuinely,
+   measurably slower than the 2021 c6i on a memory-bound 2M-atom system, because
+   AWS gives c7i.24xlarge a single NUMA node / less bandwidth. c8i is 2.0× c5.
    Where the small system left c6i/c7i within noise, the large system — which
-   truly saturates memory — separates them cleanly. (c5 large: ~6.08 ns/day, rep0
-   only — it was so slow on 2M atoms it hit the idle/TTL window before finishing
-   3 replicates: old gen can be operationally unviable for large work, not just
-   slower-per-dollar.)
+   truly saturates memory — separates every rung cleanly. (c5's CI is wide, 12%,
+   and the harness auto-flagged it `!wide-CI`: the 2019 chip's benchRIB timing is
+   noisier than the modern parts' ±0.01–0.10. It also took **3.1 h** wall-clock
+   vs minutes for c8i — old gen can be near operationally unviable for large
+   work, not merely slower-per-dollar. An earlier c5-large run hit a 120 min TTL
+   before finishing 3 replicates; re-run with a 6 h TTL for this number.)
 
 3. **Every generation collapses at 64 cores — a domain-decomposition artifact.**
    Core-count sweep (ns/day vs -nt), benchMEM:
