@@ -205,6 +205,10 @@ configs:
     applies_to: [cpu]
     tpr_variant: ""
     mdrun_flags: "-nt 48 -pin on"
+  - id: nt64
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 64 -pin on"
   - id: nt96
     applies_to: [cpu]
     tpr_variant: ""
