@@ -141,7 +141,10 @@ def env_for(cfg: dict, wl: dict, cf: dict, local: bool, name: str) -> dict[str, 
 # Vars that may be unset: expand to empty instead of erroring. GPU_AMI is only
 # needed for GPU cells, so a CPU-only run must not require it. A GPU cell with an
 # empty gpu_ami still fails clearly at spawn launch (better than blocking CPU runs).
-_OPTIONAL_VARS = {"GPU_AMI"}
+# ARM64_AMI is the same idea for the one instance (m9g) that pins an arm64 AMI to
+# work around spawn's auto-AMI arch mis-detection (spore-host/spawn#410); a run
+# that doesn't touch m9g must not require it.
+_OPTIONAL_VARS = {"GPU_AMI", "ARM64_AMI"}
 
 
 def _expand_env(obj):
@@ -206,7 +209,10 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
         rs3 = results_s3(cfg, name)
         # GPU cells need a pinned NVIDIA-driver AMI (spawn auto-AMI fails for GPU
         # types, #384); CPU cells auto-detect. gpu_ami comes from ${GPU_AMI}.
-        cell_ami = cfg.get("gpu_ami") if gpu else None
+        # An instance may also pin its own `ami:` -- needed for families spawn's
+        # auto-AMI mis-detects (e.g. m9g/Graviton5 gets an x86_64 AMI, spawn#410);
+        # explicit per-instance ami wins for both CPU and GPU cells.
+        cell_ami = inst.get("ami") or (cfg.get("gpu_ami") if gpu else None)
         launched = time.time()
         spore.launch_cell(inst["type"], image, env, gpu,
                           cfg["ttl_minutes"], cfg["idle_minutes"],
