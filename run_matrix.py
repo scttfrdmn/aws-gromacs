@@ -131,12 +131,18 @@ def env_for(cfg: dict, wl: dict, cf: dict, local: bool, name: str) -> dict[str, 
     return env
 
 
+# Vars that may be unset: expand to empty instead of erroring. GPU_AMI is only
+# needed for GPU cells, so a CPU-only run must not require it. A GPU cell with an
+# empty gpu_ami still fails clearly at spawn launch (better than blocking CPU runs).
+_OPTIONAL_VARS = {"GPU_AMI"}
+
+
 def _expand_env(obj):
     """Expand ${VAR} in every string in the loaded config, so account- and
     region-specific values (bucket, ECR URIs) stay out of the committed file --
-    the repo is public and account-agnostic. Unset vars raise, rather than
-    silently leaving a literal ${...} that would fail obscurely at launch.
-    DRY_RUN skips the check so `--list`/dry sweeps work with nothing exported."""
+    the repo is public and account-agnostic. Unset (non-optional) vars raise,
+    rather than silently leaving a literal ${...} that would fail obscurely at
+    launch. DRY_RUN skips the check so `--list`/dry sweeps need nothing exported."""
     if isinstance(obj, dict):
         return {k: _expand_env(v) for k, v in obj.items()}
     if isinstance(obj, list):
@@ -145,10 +151,14 @@ def _expand_env(obj):
         if spore.DRY_RUN:
             # Leave placeholders visible in dry-run output; don't require env.
             return os.path.expandvars(obj)
-        missing = [m for m in re.findall(r"\$\{(\w+)\}", obj) if m not in os.environ]
+        missing = [m for m in re.findall(r"\$\{(\w+)\}", obj)
+                   if m not in os.environ and m not in _OPTIONAL_VARS]
         if missing:
             raise SystemExit(f"config references unset env var(s): {', '.join(missing)}"
                              f" (in {obj!r})")
+        # Optional unset vars expand to empty.
+        for opt in _OPTIONAL_VARS:
+            obj = obj.replace(f"${{{opt}}}", os.environ.get(opt, ""))
         return os.path.expandvars(obj)
     return obj
 
@@ -186,10 +196,14 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
         image = cfg["images"][inst["arch"]]
         gpu = inst["class"] == "gpu"
         rs3 = results_s3(cfg, name)
+        # GPU cells need a pinned NVIDIA-driver AMI (spawn auto-AMI fails for GPU
+        # types, #384); CPU cells auto-detect. gpu_ami comes from ${GPU_AMI}.
+        cell_ami = cfg.get("gpu_ami") if gpu else None
         launched = time.time()
         spore.launch_cell(inst["type"], image, env, gpu,
                           cfg["ttl_minutes"], cfg["idle_minutes"],
-                          cfg["region"], name, rs3, iam_policy_file=IAM_POLICY)
+                          cfg["region"], name, rs3, iam_policy_file=IAM_POLICY,
+                          ami=cell_ami)
         # The cell reports done by writing timing.json to its S3 prefix. Poll for
         # it; the deadline is the ttl (a cell that never reports is a failure).
         deadline = launched + cfg["ttl_minutes"] * 60

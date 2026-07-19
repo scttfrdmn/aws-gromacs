@@ -76,7 +76,8 @@ WRAPPER_URL = "https://github.com/scttfrdmn/aws-gromacs/raw/main/mdrun_wrapper.s
 
 def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
                 ttl_minutes: int, idle_minutes: int, region: str, name: str,
-                results_s3: str, iam_policy_file: str | None = None) -> str:
+                results_s3: str, iam_policy_file: str | None = None,
+                ami: str | None = None) -> str:
     """Launch one autonomous benchmark cell. Fire-and-forget: returns as soon as
     spawn accepts the launch (no --wait-for-ssh), because the whole job runs from
     cell_runner.sh via --command and reports to S3. Returns the instance name.
@@ -89,7 +90,12 @@ def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
 
     The --command curls cell_runner.sh from the public repo and runs it with the
     cell's env inlined (image, region, gpu, results prefix, and the wrapper's
-    TPR/NSTEPS/... vars). AMI auto-detected. On-demand only (timing integrity).
+    TPR/NSTEPS/... vars). On-demand only (timing integrity).
+
+    AMI: CPU cells auto-detect (AL2023). GPU cells MUST pass `ami` -- spawn's
+    auto-detect fails for GPU instance types (ParameterNotFound; filed
+    spore-host/spawn#384), and GROMACS-GPU needs NVIDIA drivers on the host, so
+    we pin a Deep Learning Base OSS Nvidia AMI via matrix.yaml `gpu_ami`.
     """
     exports = {
         "IMAGE": image, "AWS_REGION": region, "GPU": "1" if gpu else "0",
@@ -110,6 +116,8 @@ def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
            "--terminate-on-error",
            "--command", command,
            "-o", "json"]
+    if ami:
+        cmd += ["--ami", ami]
     if iam_policy_file:
         # Instance role: ECR pull + S3 read/write on the bench bucket.
         cmd += ["--iam-policy-file", iam_policy_file]

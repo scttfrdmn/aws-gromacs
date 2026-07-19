@@ -35,6 +35,13 @@ capacity_max_wait_minutes: 30
 # true once the plumbing is proven and we want the capacity-watch behaviour.
 use_lagotto: false
 
+# GPU cells need an AMI with NVIDIA host drivers -- spawn's auto-AMI fails for
+# GPU instance types (spore-host/spawn#384), so pin one. This is the "Deep
+# Learning Base OSS Nvidia Driver GPU AMI (Amazon Linux 2023)" in us-east-1;
+# region-specific, so override via the env for other regions. CPU cells leave
+# this unset and auto-detect AL2023.
+gpu_ami: ${GPU_AMI}
+
 # ECR image URIs (docs/gromacs-delivery.md). One repo, five tags; spawn launches
 # a bare AL2023 instance and docker-runs the arch-appropriate tag on boot. Push
 # these before any live run (issue #2). Registry = <acct>.dkr.ecr.<region>...
