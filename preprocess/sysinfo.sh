@@ -43,14 +43,19 @@ int main(){
   #pragma omp parallel for
   for(long i=0;i<N;i++){a[i]=1.0;b[i]=2.0;c[i]=0.0;}
   double best=1e30;
+  volatile double sink=0.0;   /* consume c[] so the triad can't be optimized away */
+  double scale=3.0;
   for(int r=0;r<5;r++){
+    scale += 1.0;             /* vary the op each rep -> loop cannot be hoisted */
     double t=wt();
     #pragma omp parallel for
-    for(long i=0;i<N;i++) c[i]=a[i]+3.0*b[i];   /* Triad */
+    for(long i=0;i<N;i++) c[i]=a[i]+scale*b[i];   /* Triad */
     t=wt()-t; if(t<best)best=t;
+    sink += c[r*7 % N];       /* force c[] to be materialized */
   }
-  /* Triad moves 3 arrays * 8 bytes * N */
-  printf("%.1f\n", 3.0*8.0*N/best/1e9);   /* GB/s */
+  (void)sink;
+  /* Triad moves 3 arrays * 8 bytes * N bytes; best time -> GB/s */
+  printf("%.1f\n", 3.0*8.0*(double)N/best/1e9);
   return 0;
 }
 EOF
