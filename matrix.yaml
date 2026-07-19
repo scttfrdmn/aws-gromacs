@@ -153,10 +153,24 @@ instances:
 # ---------------------------------------------------------------------------
 configs:
   # --- D2: force placement (GPU only) ---
-  - id: gpu-resident           # baseline "modern" placement
+  # gpu-resident = full GPU-resident step, integration included (-update gpu).
+  # This is the "modern" ideal, BUT it needs GPU-LINCS-compatible constraints
+  # (h-bonds). The distributed MPINAT tprs use all-bonds, so -update gpu is
+  # infeasible on them (declared below) -- a real finding. Campaign B's
+  # self-built h-bonds system demonstrates true gpu-resident for contrast.
+  - id: gpu-resident
     applies_to: [gpu]
     tpr_variant: ""
     mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -pin on"
+
+  - id: gpu-prod              # standard production placement: forces on GPU,
+                              # integration on the CPU. Runs regardless of the
+                              # tpr's constraint topology, unlike -update gpu
+                              # (gpu-resident). The most common real-world GPU
+                              # config, and what benchMEM/benchRIB actually run.
+    applies_to: [gpu]
+    tpr_variant: ""
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update cpu -pin on"
 
   - id: gpu-cpu-pme            # PME back on the CPU
     applies_to: [gpu]
@@ -167,7 +181,7 @@ configs:
   - id: hmr
     applies_to: [gpu]
     tpr_variant: "-hmr"
-    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -pin on"
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update cpu -pin on"
 
   - id: cpu-hmr
     applies_to: [cpu]
@@ -184,14 +198,14 @@ configs:
   - id: mig2
     applies_to: [g7e]
     tpr_variant: ""
-    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update cpu -ntmpi 1 -pin on"
     mig_slices: 2
     mig_profile: 2g.48gb
 
   - id: mig4
     applies_to: [g7e]
     tpr_variant: ""
-    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update cpu -ntmpi 1 -pin on"
     mig_slices: 4
     mig_profile: 1g.24gb
 
@@ -199,7 +213,7 @@ configs:
   - id: mps4
     applies_to: [g7e, g6e]
     tpr_variant: ""
-    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update gpu -ntmpi 1 -pin on"
+    mdrun_flags: "-nb gpu -pme gpu -bonded gpu -update cpu -ntmpi 1 -pin on"
     mps_procs: 4
 
 # ---------------------------------------------------------------------------
@@ -211,6 +225,13 @@ configs:
 #   elasticity - width cannot vary mid-campaign
 #   fit        - problem does not fit the device
 infeasible:
+  # gpu-resident (-update gpu) needs GPU-LINCS-compatible constraints; the
+  # distributed benchMEM/benchRIB tprs are all-bonds, so the GPU-resident update
+  # path is unsupported for them. A real finding: the canonical, as-shipped
+  # benchmark inputs can't use the modern fully-GPU step. Use gpu-prod (-update
+  # cpu) for these; Campaign B's h-bonds system shows true gpu-resident.
+  - {config: gpu-resident, class: fit,
+     reason: "-update gpu unsupported: all-bonds constraints exceed GPU LINCS (distributed tpr)"}
   - {instance: local-spark, workload: large, class: fit,
      reason: "2M atoms exceeds usable unified memory for this config"}
   - {config: mig4, workload: large, class: fit,

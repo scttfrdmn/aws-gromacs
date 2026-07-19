@@ -68,7 +68,7 @@ tool, `load-bearing`/`blocker`/`deferred`).
 ```bash
 pip install -r requirements.txt
 
-# 1. Inspect the cross product (must show 90 cells) — no spend
+# 1. Inspect the cross product (108 cells at time of writing) — no spend
 DRY_RUN=1 python run_matrix.py --list
 
 # 2. Full dry sweep — no spend
@@ -119,7 +119,7 @@ in [`PLAN.md`](PLAN.md).
 ## Rules that are load-bearing
 
 - **Run `DRY_RUN=1 python run_matrix.py` after every edit to `run_matrix.py`.**
-  Expected: **90 cells / 90 rows**. A past edit orphaned the success path inside
+  Expected a deterministic cell count (108 at time of writing). A past edit orphaned the success path inside
   an `except` block — valid Python, silently unreachable — and only the dry run
   caught it.
 - **Every cell runs ≥3 timed replicates and reports a 95% CI.** ns/day is noisy;

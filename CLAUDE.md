@@ -33,7 +33,7 @@ unexpressible.
 - **`DRY_RUN=1 python run_matrix.py` after every edit to `run_matrix.py`.**
   A prior edit orphaned the success path inside an `except` block: valid Python,
   silently unreachable, produced a handful of rows instead of the full sweep.
-  Only the dry run caught it. Expected: **90 cells**.
+  Only the dry run caught it. Expected: **108 cells** (grew as configs were added; the point is the count is deterministic, not the exact number).
 - Timing runs are on-demand. Do not switch them to spot to save money — spot
   interruption pollutes the timing, and spot price already enters via the
   `ns_per_dollar_spot` column.
