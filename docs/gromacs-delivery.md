@@ -32,7 +32,7 @@ The five Dockerfiles are not incidental packaging — they encode the experiment
 | amd | `AVX_512`, `-march=znver4` | AMD full-width |
 | amd-avx2 | `AVX2_256` | **the "software beats hardware" arm** on identical AMD silicon |
 | arm | `ARM_SVE`, `-mcpu=neoverse-v2` | Graviton4 |
-| cuda | `GMX_GPU=CUDA` | all GPU cells (whole-card + MIG) |
+| cuda | `GMX_GPU=CUDA`, `AVX2_256` | all GPU cells; AVX2 (not AVX-512) so it runs on every GPU host CPU — g6/g6e are Zen3 (no AVX-512) and SIGILL an AVX-512 build. Host SIMD is minor when compute is GPU-offloaded. |
 
 The `amd` vs `amd-avx2` pair is a load-bearing thesis comparison (D2-adjacent:
 the SIMD build choice may beat the instance choice). A single generic build would

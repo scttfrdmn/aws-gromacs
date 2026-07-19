@@ -8,9 +8,14 @@ RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -
  && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
 # Whole-card and MIG both use this image; GROMACS GPU kernels are single-precision,
 # so the RTX PRO 6000 FP64 rate is irrelevant here.
+# SIMD = AVX2_256, NOT AVX_512: this one image runs on every GPU host CPU, which
+# vary and are NOT all AVX-512 capable -- g6/g6e are AMD EPYC 7R13 (Zen3, no
+# AVX-512), so an AVX_512 build SIGILLs on them (Illegal instruction). On GPU
+# cells the heavy compute is offloaded to the GPU, so the host SIMD width is
+# minor; AVX2_256 is the safe lowest-common-denominator across g6/g6e/g7e.
 RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
  && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
- && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_GPU=CUDA -DGMX_SIMD=AVX_512 \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_GPU=CUDA -DGMX_SIMD=AVX2_256 \
       -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
  && make -j"$(nproc)" && make install
 ENV PATH=/opt/gromacs/bin:$PATH
