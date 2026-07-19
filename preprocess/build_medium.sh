@@ -59,7 +59,13 @@ grep '^ATOM' raw.pdb > protein.pdb || true
 # crystal structure (which fails on missing/incomplete residues, e.g. 'Incomplete
 # ring in HIS739' from a raw beta-gal entry). Default HEWL (1AKI) is THE canonical
 # tutorial structure, guaranteed clean. Tune BOX_NM to hit ~medium atom count.
-BOX_NM="${BOX_NM:-5.0}"   # ~500k atoms around HEWL; script reports actual count
+# Box padding sets the size. Measured: -d 5.0 around HEWL gave only ~24k atoms
+# (dodecahedron volume grows slower than the naive cube estimate). ~500k needs a
+# much larger box: volume scales ~linearly with atom count, so 500k/24k ~= 21x
+# volume ~= 2.75x linear -> ~9 nm padding. Default 9.0; script reports the actual
+# count so it can be tuned. (A big water box around one protein is a legitimate
+# benchmark; the water IS the workload at this size.)
+BOX_NM="${BOX_NM:-9.0}"
 
 build_system() {  # $1 = topology dir tag, $2 = extra pdb2gmx flags (e.g. -heavyh)
   local tag="$1"; shift
