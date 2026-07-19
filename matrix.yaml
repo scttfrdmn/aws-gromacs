@@ -66,8 +66,13 @@ workloads:
     tpr: benchMEM              # base name; variant suffix appended, .tpr added
     atoms: 82000
   - id: medium
-    tpr: channel500k
-    atoms: 500000
+    # Built from a deposited PDB via preprocess/build_medium.sh (beta-gal,
+    # AMBER99SB-ILDN + TIP3P, equilibrated). Unlike the distributed small/large
+    # tprs this one uses h-bonds constraints, so gpu-resident (-update gpu) works
+    # on it -- and it has a real HMR variant for D1. `atoms` is set from the
+    # measured count after the build (build_medium.sh reports it), not guessed.
+    tpr: channel-medium
+    atoms: 0                   # PLACEHOLDER -- set from build_medium.sh output
   - id: large
     tpr: benchRIB
     atoms: 2000000

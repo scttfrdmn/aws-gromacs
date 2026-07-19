@@ -1,0 +1,42 @@
+; NVT equilibration: heat to 300 K with the protein position-restrained.
+; Standard AMBER99SB-ILDN + TIP3P protocol.
+integrator      = md
+nsteps          = 50000         ; 100 ps at 2 fs
+dt              = 0.002
+; output -- minimal, this is equilibration not production
+nstxout         = 0
+nstvout         = 0
+nstenergy       = 5000
+nstlog          = 5000
+; bonds
+continuation    = no
+constraint_algorithm = lincs
+constraints     = h-bonds
+lincs_iter      = 1
+lincs_order     = 4
+; neighbour searching
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 20
+rcoulomb        = 1.0
+rvdw            = 1.0
+; electrostatics
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.12
+; temperature coupling
+tcoupl          = V-rescale
+tc-grps         = Protein Non-Protein
+tau_t           = 0.1     0.1
+ref_t           = 300     300
+; no pressure coupling in NVT
+pcoupl          = no
+; periodic boundary conditions
+pbc             = xyz
+DispCorr        = EnerPres
+; velocity generation
+gen_vel         = yes
+gen_temp        = 300
+gen_seed        = -1
+; position restraints on the protein heavy atoms (define set by grompp -r)
+define          = -DPOSRES

@@ -1,0 +1,36 @@
+; NPT equilibration: relax the box to 1 bar, protein still restrained.
+; C-rescale barostat (GROMACS 2021+; correct ensemble, unlike Berendsen).
+integrator      = md
+nsteps          = 50000         ; 100 ps at 2 fs
+dt              = 0.002
+nstxout         = 0
+nstvout         = 0
+nstenergy       = 5000
+nstlog          = 5000
+continuation    = yes           ; continue from NVT
+constraint_algorithm = lincs
+constraints     = h-bonds
+lincs_iter      = 1
+lincs_order     = 4
+cutoff-scheme   = Verlet
+ns_type         = grid
+nstlist         = 20
+rcoulomb        = 1.0
+rvdw            = 1.0
+coulombtype     = PME
+pme_order       = 4
+fourierspacing  = 0.12
+tcoupl          = V-rescale
+tc-grps         = Protein Non-Protein
+tau_t           = 0.1     0.1
+ref_t           = 300     300
+; pressure coupling
+pcoupl          = C-rescale
+pcoupltype      = isotropic
+tau_p           = 2.0
+ref_p           = 1.0
+compressibility = 4.5e-5
+pbc             = xyz
+DispCorr        = EnerPres
+gen_vel         = no
+define          = -DPOSRES
