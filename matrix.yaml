@@ -183,6 +183,33 @@ instances:
 # mdrun_flags are appended verbatim. tpr_variant selects a prebuilt .tpr.
 # ---------------------------------------------------------------------------
 configs:
+  # --- Core-count sweep (CPU): expose the memory-bandwidth ceiling. Run one
+  # instance across fixed thread counts (-nt N) to see where ns/day plateaus --
+  # if MD is bandwidth-bound, adding cores stops helping well before 96, and the
+  # plateau (not the core count) is what differs by generation. Explains the
+  # non-monotonic generational ranking at full width. Scope with
+  # `--configs nt8,nt16,nt32,nt48,nt96 --instances c6i,c8i --workloads small`.
+  - id: nt8
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 8 -pin on"
+  - id: nt16
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 16 -pin on"
+  - id: nt32
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 32 -pin on"
+  - id: nt48
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 48 -pin on"
+  - id: nt96
+    applies_to: [cpu]
+    tpr_variant: ""
+    mdrun_flags: "-nt 96 -pin on"
+
   # --- D2: force placement (GPU only) ---
   # gpu-resident = full GPU-resident step, integration included (-update gpu).
   # This is the "modern" ideal, BUT it needs GPU-LINCS-compatible constraints
