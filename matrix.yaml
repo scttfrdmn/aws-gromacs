@@ -10,7 +10,13 @@
 # (DRY_RUN skips the requirement, so --list / dry sweeps need nothing set.)
 s3_bucket: aws-gromacs-bench-${AWS_ACCOUNT}   # -> s3://<bucket>/gromacs-bench/tpr/*.tpr
 region: ${AWS_REGION}                         # ECR/truffle/spawn all use this region
-nsteps: 20000                        # timed run length; -resethway halves it
+# Timed run length. -resethway resets counters at nsteps/2, discarding warmup;
+# the timed half must start AFTER GPU PME auto-tuning finishes, or mdrun aborts
+# ("PME tuning was still active when attempting to reset counters"). PME tuning
+# on GPU can run several thousand steps, so keep nsteps/2 well clear of it.
+# 60000 -> reset at 30000, ample margin on every device (CPU has no GPU PME
+# tuning, so it was fine at 20000; this is set for the GPU cells).
+nsteps: 60000
 ttl_minutes: 120
 idle_minutes: 15
 
