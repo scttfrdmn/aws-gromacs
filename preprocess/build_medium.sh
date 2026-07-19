@@ -14,10 +14,14 @@
 #   TPR_S3        s3://<bucket>/gromacs-bench/tpr   (uploads <SYS>.tpr + <SYS>-hmr.tpr)
 #   MDP_BASE_URL  raw URL prefix for the mdp files (this repo's preprocess/mdp)
 #   SYS           output basename (default channel-medium)
+#   MDRUN_NB      'gpu' (fast, needs a GPU host) or 'cpu' (default; runs anywhere,
+#                 used when GPU capacity is unavailable). Equilibration only --
+#                 does not affect the benchmark, just build wall-clock.
 #   COMPLETION_FILE  sentinel for spawn --on-complete (touched on success only)
 set -euo pipefail
 
 PDB_ID="${PDB_ID:-6X1Q}"
+MDRUN_NB="${MDRUN_NB:-cpu}"
 TPR_S3="${TPR_S3:?set TPR_S3}"
 MDP_BASE_URL="${MDP_BASE_URL:?set MDP_BASE_URL}"
 SYS="${SYS:-channel-medium}"
@@ -62,15 +66,15 @@ equilibrate() {  # $1 = tag
   local tag="$1"
   echo "== [$tag] energy minimization =="
   "$GMX" grompp -f mdp/em.mdp -c "${tag}_ions.gro" -p "${tag}.top" -o "${tag}_em.tpr" -maxwarn 2
-  "$GMX" mdrun -deffnm "${tag}_em" -nb gpu
+  "$GMX" mdrun -deffnm "${tag}_em" -nb "$MDRUN_NB"
   echo "== [$tag] NVT (100 ps, posres) =="
   "$GMX" grompp -f mdp/nvt.mdp -c "${tag}_em.gro" -r "${tag}_em.gro" -p "${tag}.top" \
     -o "${tag}_nvt.tpr" -maxwarn 2
-  "$GMX" mdrun -deffnm "${tag}_nvt" -nb gpu
+  "$GMX" mdrun -deffnm "${tag}_nvt" -nb "$MDRUN_NB"
   echo "== [$tag] NPT (100 ps, posres) =="
   "$GMX" grompp -f mdp/npt.mdp -c "${tag}_nvt.gro" -r "${tag}_nvt.gro" -t "${tag}_nvt.cpt" \
     -p "${tag}.top" -o "${tag}_npt.tpr" -maxwarn 2
-  "$GMX" mdrun -deffnm "${tag}_npt" -nb gpu
+  "$GMX" mdrun -deffnm "${tag}_npt" -nb "$MDRUN_NB"
 }
 
 # --- base (2 fs) system ---
