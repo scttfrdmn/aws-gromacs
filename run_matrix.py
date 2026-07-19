@@ -312,6 +312,10 @@ def main() -> int:
                     help="skip the capacity-probe pre-pass (the optional wait-distribution "
                          "sampling). Use when you just want the ns/$ spine -- the retry-path "
                          "probe launches throwaway instances that cost money and can fail.")
+    ap.add_argument("--launch-stagger", type=float, default=8.0,
+                    help="seconds between concurrent launch submissions. spawn creates shared "
+                         "infra (IAM role, VPC/SG) on first use; simultaneous launches race to "
+                         "create the same role and fail. A stagger lets the first win. 0 = none.")
     args = ap.parse_args()
     if args.dry_run:
         os.environ["DRY_RUN"] = "1"
@@ -442,8 +446,21 @@ def main() -> int:
             rows.append(run_one(wl, inst, cf))
     else:
         print(f"running {len(runnable)} cells, up to {workers} concurrent")
+        # Stagger submissions: spawn launch creates shared infra (the
+        # spored-instance-role, VPC/SG) on first use, and N truly-simultaneous
+        # launches race to create the SAME role -> all-but-one fail. A short
+        # stagger lets the first launch win the shared-resource creation and the
+        # rest reuse it. Launches return in seconds (fire-and-forget), so the
+        # stagger barely affects wall-clock.
+        # Only the first `workers` start together (later ones wait for a free
+        # slot, naturally serialized), so cap the stagger delay at that window.
+        def _staggered(idx, wl, inst, cf):
+            if not spore.DRY_RUN:   # no real launches in dry-run; don't sleep
+                time.sleep(min(idx, workers) * args.launch_stagger)
+            return run_one(wl, inst, cf)
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futs = [pool.submit(run_one, wl, inst, cf) for wl, inst, cf in runnable]
+            futs = [pool.submit(_staggered, i, wl, inst, cf)
+                    for i, (wl, inst, cf) in enumerate(runnable)]
             for fut in as_completed(futs):
                 rows.append(fut.result())
 

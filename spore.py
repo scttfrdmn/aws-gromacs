@@ -22,6 +22,7 @@ import json
 import os
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 
 DRY_RUN = os.environ.get("DRY_RUN", "0") == "1"
@@ -121,8 +122,23 @@ def launch_cell(instance_type: str, image: str, env: dict[str, str], gpu: bool,
     if iam_policy_file:
         # Instance role: ECR pull + S3 read/write on the bench bucket.
         cmd += ["--iam-policy-file", iam_policy_file]
-    _run(cmd)
-    return name
+    # Retry transient launch failures: concurrent launches can still race on
+    # shared-infra creation (IAM role, VPC/SG) or hit API throttling even with a
+    # stagger. A couple of backoff retries makes the batch robust. DRY_RUN and
+    # hard errors (bad AMI, quota) surface on the final attempt.
+    if DRY_RUN:
+        _run(cmd)
+        return name
+    last = None
+    for attempt in range(3):
+        try:
+            _run(cmd)
+            return name
+        except subprocess.CalledProcessError as e:
+            last = e
+            time.sleep(5 * (attempt + 1))
+    raise last
+
 
 
 def fetch_s3(s3_prefix: str, local_path: str) -> None:
