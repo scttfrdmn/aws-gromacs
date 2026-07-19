@@ -66,13 +66,13 @@ workloads:
     tpr: benchMEM              # base name; variant suffix appended, .tpr added
     atoms: 82000
   - id: medium
-    # Built from a deposited PDB via preprocess/build_medium.sh (beta-gal,
-    # AMBER99SB-ILDN + TIP3P, equilibrated). Unlike the distributed small/large
-    # tprs this one uses h-bonds constraints, so gpu-resident (-update gpu) works
-    # on it -- and it has a real HMR variant for D1. `atoms` is set from the
-    # measured count after the build (build_medium.sh reports it), not guessed.
+    # Real membrane protein in a POPC bilayer (benchMEM's class, scaled up),
+    # built in CHARMM-GUI Membrane Builder and ingested by
+    # preprocess/build_medium_charmmgui.sh (CHARMM36m; base 2fs + HMR 4fs). See
+    # docs/divergence.md. `atoms` is set from the measured count after the build,
+    # not guessed. GATED on CHARMM-GUI login (~24h).
     tpr: channel-medium
-    atoms: 0                   # PLACEHOLDER -- set from build_medium.sh output
+    atoms: 0                   # PLACEHOLDER -- set from the CHARMM-GUI build
   - id: large
     tpr: benchRIB
     atoms: 2000000
