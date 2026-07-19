@@ -59,6 +59,7 @@ images:
   amd: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx512
   amd_avx2: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:amd-avx2
   arm: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:arm-sve
+  arm_neon: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:arm-neon
   cuda: ${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com/gromacs-bench:cuda
 
 workloads:
@@ -123,11 +124,56 @@ instances:
     class: cpu
     arch: amd_avx2
 
+  # --- Phase 6: AMD generational ladder (c6a/c7a/c8a = Zen3/4/5). All use the
+  # amd_avx2 image (AVX2_256): AVX-512 arrived in Zen4, so c6a (Zen3) has no
+  # AVX-512 -- AVX2 is the lowest common ISA that runs across the whole ladder
+  # (same controlled choice as Intel getting AVX-512 across c5-c8i). Run via
+  # `--instances c6a,c7a,c8a-avx2`.
+  - id: c6a
+    provider: aws
+    type: c6a.24xlarge         # Zen3 / EPYC Milan (2021), no AVX-512
+    class: cpu
+    arch: amd_avx2
+  - id: c7a
+    provider: aws
+    type: c7a.24xlarge         # Zen4 / EPYC Genoa (2023)
+    class: cpu
+    arch: amd_avx2
+
   - id: c8g                    # Graviton4, SVE2
     provider: aws
     type: c8g.24xlarge
     class: cpu
     arch: arm
+
+  # --- Phase 6: Graviton generational ladder, Graviton2 -> Graviton5.
+  # All use a dedicated arm-neon image (arch: arm_neon): the ISA floor rises
+  # across the ladder (G2 NEON-only, G3 SVE, G4 SVE2, G5 newer), so ARM_NEON is
+  # the lowest common ISA that runs on ALL of them (the arm-sve image SIGILLs on
+  # G2/G3). Same controlled choice as the AMD ladder. Needs the arm-neon image.
+  # NOTE: exact silicon per rung is confirmed from lscpu in sysinfo.json, NOT
+  # assumed from the instance name (the name->generation map is easy to get
+  # wrong). Run via `--instances c6g,c7g,c8g-neon,m9g`.
+  - id: c6g
+    provider: aws
+    type: c6g.16xlarge         # expect Graviton2 / Neoverse-N1 (NEON only)
+    class: cpu
+    arch: arm_neon
+  - id: c7g
+    provider: aws
+    type: c7g.16xlarge         # expect Graviton3 / Neoverse-V1
+    class: cpu
+    arch: arm_neon
+  - id: c8g-neon
+    provider: aws
+    type: c8g.24xlarge         # Graviton4, NEON build for ladder consistency
+    class: cpu
+    arch: arm_neon
+  - id: m9g
+    provider: aws
+    type: m9g.24xlarge         # expect Graviton5 (current gen, 2026)
+    class: cpu
+    arch: arm_neon
 
   - id: g6                     # L4
     provider: aws

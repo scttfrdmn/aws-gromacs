@@ -1,0 +1,24 @@
+FROM arm64v8/ubuntu:24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget curl unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+# awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+ && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
+# ARM_NEON build for the GRAVITON GENERATIONAL LADDER (Graviton2->5). The ISA
+# floor rises across the ladder (G2 NEON-only, G3 SVE, G4 SVE2), so NEON is the
+# lowest common instruction set that runs on ALL of them -- the arm-sve image
+# (ARM_SVE, -mcpu=neoverse-v2) SIGILLs on Graviton2/3. -mcpu=generic keeps it
+# portable across every Graviton generation (no gen-specific tuning), so the
+# comparison isolates the hardware generation, not the build. This is the
+# ladder's controlled arm; the arm-sve image remains the best-per-chip Graviton4
+# build for the main sweep.
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=ARM_NEON_ASIMD \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+      -DCMAKE_C_FLAGS="-mcpu=generic" -DCMAKE_CXX_FLAGS="-mcpu=generic" \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh
