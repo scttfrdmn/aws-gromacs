@@ -16,12 +16,15 @@ only via the ns/$ spot column). GROMACS 2025.2.
 (96 vCPU). ns/day is rep0 pending 3-replicate CIs; the pattern is far larger than
 run-to-run noise. Bandwidth = measured STREAM triad (`preprocess/sysinfo.sh`).
 
+ns/day is 3-replicate mean ± 95% CI where shown (@96c and @48c); STREAM = measured
+triad bandwidth (`preprocess/sysinfo.sh`).
+
 | gen | µarch (year) | $/hr OD | STREAM GB/s | NUMA | ns/day @96c |
 |-----|--------------|---------|-------------|------|-------------|
-| c5  | Cascade Lake (2019) | 4.08 | 161 | 2 | 80 (partial) |
-| c6i | Ice Lake (2021)     | 4.08 | 272 | 2 | 141 |
-| c7i | Sapphire Rapids (2023) | 4.28 | 186 | **1** | 137 |
-| c8i | Granite Rapids (2025) | 4.50 | 355 | 2 | 174 |
+| c5  | Cascade Lake (2019) | 4.08 | 161 | 2 | (high-core pending) |
+| c6i | Ice Lake (2021)     | 4.08 | 272 | 2 | 143.7 ± 6.7 |
+| c7i | Sapphire Rapids (2023) | 4.28 | 186 | **1** | 137.8 ± 4.1 |
+| c8i | Granite Rapids (2025) | 4.50 | 355 | 2 | 175.8 ± 3.6 |
 
 **Three measured findings:**
 
@@ -30,14 +33,18 @@ run-to-run noise. Bandwidth = measured STREAM triad (`preprocess/sysinfo.sh`).
    $/hr (which rise only ~10% c5→c8i). MD on CPU is bandwidth-bound; the menu
    number ($/hr) and the spec-sheet generation both fail to predict $/result.
 
-2. **The generational order INVERTS at full width — and bandwidth explains it.**
-   At 96 cores c7i (137) sits *below* c6i (141), breaking the c5<c6i<c7i<c8i
-   staircase. Cause: AWS provisions c7i.24xlarge as a **single NUMA node** with
-   the lowest bandwidth of the modern three (186 GB/s, barely above 2019's c5).
-   The core-count sweep confirms it: at 8/16/32/48 cores c7i is *faster* than c6i
-   (true per-core IPC), but its bandwidth ceiling drops it below c6i once the
-   cores are all fighting for memory. The full-width number lies; the curve
-   tells the truth.
+2. **The clean per-core staircase COLLAPSES at full width — bandwidth explains it.**
+   At 48 cores (all fed) the order is monotonic and CI-clean: c6i 108.5±3.0 <
+   c7i 123.3±0.9 < c8i 161.4±3.7 — true per-core generational IPC, c7i clearly
+   ahead of c6i. At 96 cores that lead **evaporates**: c6i 143.7±6.7 vs c7i
+   137.8±4.1 — the CIs **overlap**, so c7i and c6i are statistically tied at full
+   width (NOT a confirmed inversion — rep0 alone suggested c7i<c6i, but with 3
+   replicates it is within noise; per the CI rule that ordering is not a finding).
+   The real, defensible result: **c7i leads c6i by ~14% at 48 cores but loses
+   that lead entirely by 96**, because AWS provisions c7i.24xlarge as a **single
+   NUMA node** with the lowest bandwidth of the modern three (186 GB/s, barely
+   above 2019's c5). Its cores starve for memory before c6i's (272 GB/s) do. The
+   full-width number hides the per-core truth; the curve reveals it.
 
 3. **Every generation collapses at 64 cores — a domain-decomposition artifact.**
    Core-count sweep (ns/day vs -nt), benchMEM:
@@ -59,9 +66,12 @@ run-to-run noise. Bandwidth = measured STREAM triad (`preprocess/sysinfo.sh`).
 cores. Check the NUMA layout your cloud vendor actually gives you, and don't
 assume filling the box is optimal.* (Phase 6)
 
-**Caveat:** rep0 values shown; 3-replicate CIs to be folded in. c5 high-core
-points still landing (oldest chip, slowest cells). The 48-core monotonic
-staircase (c5 92 < c6i 108 < c7i 123 < c8i 162) is the clean per-core ordering.
+**Data quality:** @96c and @48c are 3-replicate mean±CI (the load-bearing cells).
+The 64-core-collapse and per-core-scaling numbers in the tables are rep0 (the
+effects there are far larger than the ~2-5% CIs seen at 48/96, so the direction
+is robust; exact values pending full CIs). c5's 64/96-core points are still
+landing (oldest chip = slowest cells). The 48-core staircase (c6i 108.5±3.0 <
+c7i 123.3±0.9 < c8i 161.4±3.7) is CI-clean and is the true per-core ordering.
 
 ---
 
