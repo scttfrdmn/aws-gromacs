@@ -204,7 +204,11 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
     else:  # aws: autonomous cell -- launch, then poll S3 (no held SSH)
         prices = spore.truffle_price(inst["type"], cfg["region"])
         od, spot = prices.on_demand_hr, prices.spot_hr
-        image = cfg["images"][inst["arch"]]
+        # arch selects the shared family image; an instance may override with its
+        # own `image:` (a per-chip native-tuned tag, or a floor tag distinct from
+        # the family default) -- the tuned-vs-floor matrix needs same instance
+        # type, different binary. Explicit image wins; ${AWS_ACCOUNT}/... expand.
+        image = inst.get("image") or cfg["images"][inst["arch"]]
         gpu = inst["class"] == "gpu"
         rs3 = results_s3(cfg, name)
         # GPU cells need a pinned NVIDIA-driver AMI (spawn auto-AMI fails for GPU
