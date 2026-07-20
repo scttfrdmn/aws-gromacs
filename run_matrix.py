@@ -224,11 +224,25 @@ def run_cell(cfg: dict, wl: dict, inst: dict, cf: dict,
                           ami=cell_ami)
         # The cell reports done by writing timing.json to its S3 prefix. Poll for
         # it; the deadline is the ttl (a cell that never reports is a failure).
-        deadline = launched + cfg["ttl_minutes"] * 60
-        timing = providers.await_cell_timing(rs3, deadline)
-        if timing is None:
-            raise RuntimeError(f"cell {name} did not report within TTL")
-        spore.fetch_s3(rs3, str(cell_dir / "logs") + "/")
+        # SAFETY NET: terminate coordinator-side in `finally` regardless of
+        # outcome. The autonomous --on-complete/--idle teardown is NOT reliable
+        # (2026-07-20: 17 cells wrote the completion sentinel yet none
+        # self-terminated; see cell_runner.sh SPORE marker / GAPS G10). Without
+        # this, every cell leaks until --ttl (hours) -- a real cost bug. Results
+        # are already durable in S3 before we tear down, so terminating here does
+        # not race the data.
+        try:
+            deadline = launched + cfg["ttl_minutes"] * 60
+            timing = providers.await_cell_timing(rs3, deadline)
+            if timing is None:
+                raise RuntimeError(f"cell {name} did not report within TTL")
+            spore.fetch_s3(rs3, str(cell_dir / "logs") + "/")
+        finally:
+            try:
+                spore.terminate(name)
+            except Exception as e:   # never let teardown mask the real result
+                print(f"WARN: coordinator terminate({name}) failed: {e}; "
+                      f"instance will fall back to --ttl/--idle reaping")
         # GPU cells wrote gpuutil.json (DCGM summary) alongside the logs.
         gutil_path = cell_dir / "logs" / "gpuutil.json"
         if gpu and gutil_path.exists():

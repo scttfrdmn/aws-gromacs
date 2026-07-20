@@ -67,6 +67,22 @@ instance-per-shard) we need to attribute the amortizable portion specifically.
 **G9. Structured spot-interruption event with timestamp.**
 Needed to reconcile incurred cost against wasted work in `$/result`.
 
+**G10. `--completion-file` + `--on-complete terminate` did not tear down (LOAD-BEARING).**
+In the 2026-07-20 three-vendor run, **17 autonomous cells wrote the host
+completion sentinel** (`/tmp/bench/SPAWN_COMPLETE`, the exact `--completion-file`
+path) **yet none self-terminated** — and the 45-minute `--idle-timeout` did not
+fire either; the instances ran for hours until manually terminated (only `--ttl`
+would eventually have reaped them). spawn 0.83.1. This is the autonomous-cell
+model's core safety mechanism, so it is load-bearing. Repro needs isolation:
+(a) does spawn detect a `touch`-created (root-owned, via docker bind mount) file,
+or does it need the file created after launch by the spored user? (b) does a
+lingering `tee` process-substitution child (cell_runner.sh) keep the workload
+looking non-idle? (c) is completion detection even armed when `--command` is a
+long-running foreground process? Until resolved, the coordinator terminates every
+cell explicitly after collecting results (run_matrix.py `finally: spore.terminate`)
+— do NOT rely on autonomous teardown. Also: `spawn terminate <name>` (without
+`--yes`) silently no-ops; `spore.terminate` uses `--yes`.
+
 ## Harness-side, not a tool gap
 
 - `providers._epoch()` assumes `sacct` emits `%Y-%m-%dT%H:%M:%S` in local time.

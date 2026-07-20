@@ -142,8 +142,28 @@ cat > "$TIMING" <<EOF
 EOF
 aws s3 cp "$TIMING" "$RESULTS_S3/timing.json" --only-show-errors
 
-# The wrapper already pushed md*.log to $RESULTS_S3 before its own sentinel; but
-# it wrote the sentinel INSIDE the container. Signal completion on the HOST now,
-# only on this success path, so spawn --on-complete terminates the box.
-touch "$COMPLETION_FILE"
+# Signal completion on the HOST, success path only, so spawn --on-complete
+# terminates the box.
+#
+# sudo: the container runs as root and, via the -v bind mount, the wrapper's own
+# `touch $CTR_WORK/SPAWN_COMPLETE` already created /tmp/bench/SPAWN_COMPLETE
+# ROOT-owned. This runner runs as the non-root spawn user, so a plain `touch` of
+# the existing root-owned file failed "Permission denied" and (under set -e)
+# crashed the runner at the very end. NOTE: that crash is NOT why cells failed to
+# self-terminate -- the wrapper's in-container touch had ALREADY placed the
+# sentinel on the host (bind mount) before this line, yet --on-complete did not
+# fire and the 45m --idle-timeout did not fire either; only --ttl would have
+# reaped them. So there is a REAL, still-unexplained spawn completion/idle-detect
+# failure here (see GAPS G10 / SPORE marker below). sudo touch just removes the
+# spurious non-zero exit; it is NOT confirmed to fix teardown.
+sudo touch "$COMPLETION_FILE" || true
+# Flush the process-substitution `tee` (line ~37) before exiting: a lingering
+# tee child can keep the workload looking alive, a plausible contributor to the
+# idle/on-complete miss. Best-effort.
+sync
 echo "== cell complete =="
+# SPORE: completion-signal -> --on-complete terminate teardown is NOT verified.
+# In the 2026-07-20 three-vendor run, 17 cells wrote the host sentinel yet none
+# self-terminated (neither --on-complete nor --idle-timeout fired); all were
+# manually terminated. Do not trust autonomous teardown until this is exercised
+# and confirmed live. Coordinator-side reaping is the safety net until then.
