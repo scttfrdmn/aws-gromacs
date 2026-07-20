@@ -10,6 +10,95 @@ only via the ns/$ spot column). GROMACS 2025.2.
 
 ---
 
+## F3 — "Compile for the newest ISA" is wrong on 2 of 3 CPU vendors; the effect grows with generation, opposite signs (Phase 6)
+
+**System:** benchRIB (2M atoms). Three generational ladders — Intel c5→c8i, AMD
+c6a→c8a, Graviton c6g→m9g — each run as a **two-build matrix**: a *floor* build
+(one portable binary per family: x86 AVX2_256, Graviton ARM_NEON) that isolates
+the hardware generation, and a *tuned* build (`-march=native`/`-mcpu=native`
+compiled **on** the target chip, so GROMACS auto-selects the best SIMD kernels)
+that isolates what compiling-for-the-chip buys. The gap between them is the
+finding. All cells are 3-replicate mean ± 95% CI; SIMD level confirmed from each
+mdrun log. STREAM = measured triad bandwidth (`preprocess/sysinfo.sh`).
+
+**Floor → tuned, ns/day (n=3, 95% CI):**
+
+| vendor | chip (µarch) | STREAM | floor (AVX2/NEON) | tuned (native) | tuned SIMD | Δ tuned vs floor |
+|--------|--------------|--------|-------------------|----------------|-----------|------------------|
+| Intel | c5 Cascade | 161 | 5.27 ± 0.52 | 6.36 ± 0.20 | AVX-512 | **+21%** |
+| Intel | c6i Ice | 272 | 8.46 ± 0.04 | 9.56 ± 0.02 | AVX-512 | **+13%** |
+| Intel | c7i Sapphire | 186 | 7.64 ± 0.001 | 8.81 ± 0.04 | AVX-512 | **+15%** |
+| Intel | c8i Granite | 355 | 10.59 ± 0.005 | 12.10 ± 0.10 | AVX-512 | **+14%** |
+| AMD | c6a Zen3 | 101 | 6.63 ± 0.01 | *— none —* | (no AVX-512) | **N/A** |
+| AMD | c7a Zen4 | 298 | 10.93 ± 0.10 | 11.59 ± 0.04 | AVX-512 | **+6%** |
+| AMD | c8a Zen5 | 378 | 16.39 ± 0.02 | 20.15 ± 0.07 | AVX-512 | **+23%** |
+| Graviton | c6g G2 | 150 | *pending CI* | *— none —* | (no SVE) | **N/A** |
+| Graviton | c7g G3 | 247 | 4.875 ± 0.001 | 4.844 ± 0.002 | SVE | **−0.6%** |
+| Graviton | c8g G4 | 381 | 8.10 ± 0.01 | 7.27 ± 0.00 | SVE2 | **−10%** |
+| Graviton | m9g G5 | 306 | 10.64 ± 0.01 | 8.97 ± 0.01 | SVE | **−16%** |
+
+**Four measured findings:**
+
+1. **On Graviton, the "better" ISA (SVE) is a REGRESSION for GROMACS, and it gets
+   worse on newer silicon.** NEON beats SVE on every Graviton that has SVE:
+   G3 −0.6% (essentially tied), G4 −10%, G5 −16% — three chips, all CIs disjoint,
+   monotonically worsening. Root cause, confirmed from the mdrun log: the native
+   build selects `ARM_SVE` with `-msve-vector-bits=128`. Graviton implements SVE
+   at **128-bit vector width — the same width as NEON** — so there is no width
+   advantage, and GROMACS's SVE kernel path is less mature than its
+   heavily-hand-tuned NEON path. The claim is not "SVE is bad"; it is "SVE at the
+   width Graviton ships does not beat NEON for MD, and choosing it costs you more
+   on each newer generation."
+
+2. **On x86, AVX-512 HELPS — uniformly on Intel, and increasingly on AMD.** Intel:
+   every rung gains (+21/+13/+15/+14% for c5/c6i/c7i/c8i). AMD: the gain *grows*
+   with generation — Zen4 +6%, Zen5 +23% (Zen5's full-width AVX-512 datapath vs
+   Zen4's double-pumped one). AMD is the mirror image of Graviton: same
+   "effect widens with generation," opposite sign.
+
+3. **The AVX-512-downclock hypothesis is REFUTED for this workload.** The textbook
+   expectation — enabling AVX-512 on c5 (Cascade Lake) triggers enough frequency
+   throttling that the AVX2 floor should win — did not happen: c5 gains +21% from
+   AVX-512. On a bandwidth-bound 2M-atom MD run, the wider vectors more than offset
+   the modest all-core clock drop. The downclock penalty is real for compute-bound
+   AVX-heavy code; MD on CPU is memory-bound, so it does not dominate. (This is why
+   the arm was run rather than asserted — the prediction was wrong.)
+
+4. **The oldest chips cannot be tuned up at all.** Zen3 (c6a) has no AVX-512 and
+   Graviton2 (c6g) has no SVE, so their portable floor build *is* their maximum —
+   there is no tuned arm to run. You cannot compile your way out of old silicon;
+   the only lever left is replacing the hardware. (Graviton2 is also near
+   operationally unviable for large MD: 3.20 ns/day / 7.5 h per ns, so slow that a
+   3-replicate run overran the default idle/TTL and had to be re-run at a 10 h TTL
+   — the same "old gen is slow enough to matter operationally" seen for c5 in F2.)
+
+**Conclusion.** The universal on-prem instinct — *compile `-march=native`, use the
+newest instruction set the chip advertises* — is **correct on Intel, partly correct
+on AMD (small on Zen4, large on Zen5), and actively wrong on Graviton** (SVE loses
+to NEON, more so each generation). "Max tuning" is neither free nor monotonic nor
+portable: the right build is per-chip, and on two of three vendors here the naive
+choice leaves performance on the table or takes it away. In the cloud you pick the
+binary as well as the box — and the floor build, not the tuned one, is the right
+default on Graviton. All comparisons respect the CI rule; the only overlapping-CI
+pair (c7g SVE vs NEON) is reported as a tie, not an inversion.
+
+*If you want CPU throughput on Graviton: build NEON, not SVE. On x86: AVX-512 is
+worth it, most on the newest AMD. On any vendor's oldest rung: the build can't save
+you.* (Phase 6)
+
+**Data quality:** every Δ above is between two 3-replicate mean±CI cells with
+non-overlapping CIs except c7g (−0.6%, a statistical tie reported as such). c5 and
+c8i tuned cells carry wider CIs (~3–4%, oldest and re-launched respectively) but
+their +21%/+14% gaps dwarf the CI. c6g (Graviton2) floor CI is pending a 10 h
+re-run (2 replicates agreed exactly at 3.204 before the first run was reaped).
+Floor builds: x86 = `-march=znver3`/generic AVX2_256 (znver3 chosen after
+`-march=znver4` was found to emit AVX-512 in compiler codegen and SIGILL on Zen3);
+Graviton = `ARM_NEON_ASIMD`/`-mcpu=generic`. Both are one binary across their whole
+ladder, so the floor ladders also re-confirm F2's bandwidth story
+(AMD 6.63<10.93<16.39, Intel 5.27<8.46<10.59, tracking STREAM).
+
+---
+
 ## F2 — Neither generation nor $/hr predicts CPU throughput; memory bandwidth does (Phase 6)
 
 **Systems:** benchMEM (82k). Intel generational ladder c5→c8i, all `.24xlarge`
