@@ -32,7 +32,7 @@ mdrun log. STREAM = measured triad bandwidth (`preprocess/sysinfo.sh`).
 | AMD | c6a Zen3 | 101 | 6.63 ± 0.01 | *— none —* | (no AVX-512) | **N/A** |
 | AMD | c7a Zen4 | 298 | 10.93 ± 0.10 | 11.59 ± 0.04 | AVX-512 | **+6%** |
 | AMD | c8a Zen5 | 378 | 16.39 ± 0.02 | 20.15 ± 0.07 | AVX-512 | **+23%** |
-| Graviton | c6g G2 | 150 | *pending CI* | *— none —* | (no SVE) | **N/A** |
+| Graviton | c6g G2 | 150 | 3.205 ± 0.003 | *— none —* | (no SVE) | **N/A** |
 | Graviton | c7g G3 | 247 | 4.875 ± 0.001 | 4.844 ± 0.002 | SVE | **−0.6%** |
 | Graviton | c8g G4 | 381 | 8.10 ± 0.01 | 7.27 ± 0.00 | SVE2 | **−10%** |
 | Graviton | m9g G5 | 306 | 10.64 ± 0.01 | 8.97 ± 0.01 | SVE | **−16%** |
@@ -95,7 +95,12 @@ Floor builds: x86 = `-march=znver3`/generic AVX2_256 (znver3 chosen after
 `-march=znver4` was found to emit AVX-512 in compiler codegen and SIGILL on Zen3);
 Graviton = `ARM_NEON_ASIMD`/`-mcpu=generic`. Both are one binary across their whole
 ladder, so the floor ladders also re-confirm F2's bandwidth story
-(AMD 6.63<10.93<16.39, Intel 5.27<8.46<10.59, tracking STREAM).
+(AMD 6.63<10.93<16.39, Intel 5.27<8.46<10.59, tracking STREAM). The Graviton floor
+ladder rises with generation (G2 3.21 < G3 4.88 < G4 8.10 < G5 10.64) but is NOT
+strictly bandwidth-ordered at the top: m9g/G5 (306 GB/s) beats c8g/G4 (381 GB/s),
+so on Graviton, core/IPC generation outweighs STREAM at the high end — the reverse
+of the AMD/Intel ladders where bandwidth dominates. c6g/G2 took 5.5 h wall-clock
+for its 3 replicates (3.205 ± 0.003), reinforcing finding 4.
 
 ---
 
