@@ -5,14 +5,23 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
 RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
  && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
-# AVX2_256 variant: the comparison arm against the AVX_512 build on Zen 5.
-# -march=znver4: GCC 14.2 (Ubuntu 24.04) has no znver5; znver4 is the newest Zen
-# tuning it supports. See Dockerfile.amd for the full note.
+# AVX2_256 build for the AMD GENERATIONAL LADDER (Zen3 c6a -> Zen4 c7a -> Zen5
+# c8a), and the AVX2-vs-AVX512 comparison arm on Zen5.
+#
+# -march=znver3 (NOT znver4): this is the lowest-common ISA floor for the ladder,
+# the exact analogue of ARM_NEON on the Graviton ladder and AVX-512 on the Intel
+# ladder (one binary, every rung). znver4 was WRONG here: -march=znver4 makes GCC
+# emit AVX-512 in ALL compiler-generated code (scalar + autovec), regardless of
+# GMX_SIMD=AVX2_256 (which only governs GROMACS's hand-written kernels). Zen3 has
+# no AVX-512, so a znver4 binary SIGILLs on c6a ("invalid opcode" in libgromacs),
+# and even on Zen4/5 it is a different binary than the ladder's other rungs --
+# breaking the "one controlled binary across generations" premise (see F2). znver3
+# is AVX2-era (no AVX-512), tunes for Zen3, and runs unchanged on Zen4 and Zen5.
 RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
  && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
  && cmake .. -DGMX_BUILD_OWN_FFTW=ON -DGMX_SIMD=AVX2_256 \
       -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
-      -DCMAKE_C_FLAGS="-march=znver4" -DCMAKE_CXX_FLAGS="-march=znver4" \
+      -DCMAKE_C_FLAGS="-march=znver3" -DCMAKE_CXX_FLAGS="-march=znver3" \
  && make -j"$(nproc)" && make install
 ENV PATH=/opt/gromacs/bin:$PATH
 COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
