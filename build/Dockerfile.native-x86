@@ -1,0 +1,27 @@
+FROM ubuntu:24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget curl unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+# awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+ && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
+# MAX-TUNED x86 build: -march=native + auto-detected GMX_SIMD. This MUST be built
+# ON the target instance (build_and_push runs on the spawned host), so "native"
+# resolves to that exact chip: Zen4 -> AVX-512, Zen5 -> AVX-512 (+ Zen5 tuning),
+# Sapphire/Granite Intel -> AVX-512. Leaving GMX_SIMD unset lets GROMACS's cmake
+# pick the best SIMD kernel set for the host -- true per-chip maximum, no guessing
+# GCC's -march names (which matters for Zen5/newer that GCC 14.2 can't name yet).
+# The per-chip tag (e.g. amd-native-c8a) records WHICH chip it was built on; a
+# native binary is only valid on the chip that built it. This is the "tuned" arm
+# of the baseline-vs-tuned matrix; the portable floor is Dockerfile.amd-avx2
+# (znver3/AVX2). Chips whose max IS the floor (Zen3 = AVX2, no AVX-512) need no
+# native build -- the floor already is their maximum.
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+      -DCMAKE_C_FLAGS="-march=native" -DCMAKE_CXX_FLAGS="-march=native" \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh

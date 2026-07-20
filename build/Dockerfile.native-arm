@@ -1,0 +1,26 @@
+FROM arm64v8/ubuntu:24.04
+ARG GMX=2025.2
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential cmake wget curl unzip ca-certificates && rm -rf /var/lib/apt/lists/*
+# awscli v2 via the official installer -- Ubuntu 24.04 dropped the apt package.
+RUN curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip \
+ && unzip -q /tmp/awscliv2.zip -d /tmp && /tmp/aws/install && rm -rf /tmp/aws /tmp/awscliv2.zip
+# MAX-TUNED Graviton build: -mcpu=native + auto-detected GMX_SIMD. MUST be built
+# ON the target instance so "native" resolves to that exact Graviton:
+#   Graviton3 -> SVE, Graviton4 -> SVE2, Graviton5 -> its newest ISA.
+# -mcpu=native is the arm analogue of -march=native and avoids guessing GCC's
+# -mcpu names (neoverse-v1/v2/...) -- decisive for Graviton5, which GCC 14.2 has
+# no name for. Leaving GMX_SIMD unset lets cmake pick the best SIMD (ARM_SVE where
+# available) for the host = true per-chip maximum. The per-chip tag (arm-native-<id>)
+# records which Graviton built it; a native binary runs only on that chip.
+# This is the "tuned" arm vs the portable NEON floor (Dockerfile.arm-neon).
+# Graviton2 has no SVE, so NEON IS its max -- no native build needed there.
+RUN wget -q https://ftp.gromacs.org/gromacs/gromacs-${GMX}.tar.gz \
+ && tar xf gromacs-${GMX}.tar.gz && cd gromacs-${GMX} && mkdir b && cd b \
+ && cmake .. -DGMX_BUILD_OWN_FFTW=ON \
+      -DGMX_MPI=OFF -DCMAKE_INSTALL_PREFIX=/opt/gromacs \
+      -DCMAKE_C_FLAGS="-mcpu=native" -DCMAKE_CXX_FLAGS="-mcpu=native" \
+ && make -j"$(nproc)" && make install
+ENV PATH=/opt/gromacs/bin:$PATH
+COPY mdrun_wrapper.sh /opt/bench/mdrun_wrapper.sh
+RUN chmod +x /opt/bench/mdrun_wrapper.sh
