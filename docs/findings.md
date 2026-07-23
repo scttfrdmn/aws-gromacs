@@ -158,6 +158,19 @@ so on Graviton, core/IPC generation outweighs STREAM at the high end — the rev
 of the AMD/Intel ladders where bandwidth dominates. c6g/G2 took 5.5 h wall-clock
 for its 3 replicates (3.205 ± 0.003), reinforcing finding 4.
 
+**Third-workload confirmation (medium, 351k atoms).** The floor ladders were re-run
+on the `medium` KcsA/POPC system (n=3), and **both structural anomalies reproduce**,
+independent of the small (82k) and large (2M) systems — strong evidence they are
+architectural, not per-workload noise:
+- Intel **c7i (186 GB/s) < c6i (272)**: 19.56 ± 0.03 < 21.02 ± 0.13 — the
+  low-bandwidth single-NUMA c7i inversion, now seen on all three workloads.
+- Graviton **m9g/G5 (306 GB/s) > c8g/G4 (381)**: 26.60 ± 0.04 > 18.72 ± 0.17 — the
+  G5>G4 bandwidth inversion, reproduced; core/IPC generation again beats STREAM at
+  the Graviton top.
+- AMD is clean-monotonic with bandwidth on medium too (Zen3 13.61 < Zen4 23.42 <
+  Zen5 33.79). Bandwidth predicts CPU throughput *within a shared-ISA ladder* across
+  small, medium, and large.
+
 ---
 
 ## F2 — Neither generation nor $/hr predicts CPU throughput; memory bandwidth does (Phase 6)
