@@ -10,6 +10,62 @@ only via the ns/$ spot column). GROMACS 2025.2.
 
 ---
 
+## F4 — The GPU-vs-CPU verdict FLIPS with system size; the crossover is real but narrow once the CPU is tuned (D3, regime boundary)
+
+**Systems:** benchMEM (82k, from F1) and the new `medium` system — a KcsA K⁺-channel
+tetramer in a POPC bilayer, 351k atoms, built in CHARMM-GUI (CHARMM36m). This is the
+regime boundary F1 explicitly flagged as "still to be measured."
+
+**Best CPU vs best available GPU, ns/day (n=3, 95% CI):**
+
+| system (atoms) | best CPU (build) | GPU (g6e L40S, gpu-prod) | winner |
+|----------------|------------------|--------------------------|--------|
+| benchMEM (82k) | c8a Zen5 **270.6 ± 2.9** (F1) | L4 **182.3 ± 1.5** (F1) | **CPU, 1.48×** |
+| medium (351k)  | c8a Zen5 tuned **41.28 ± 0.27** | L40S **49.51 ± 0.18** | **GPU, 1.20×** |
+
+**Three measured findings:**
+
+1. **The verdict flips with system size — exactly as F1's utilization argument
+   predicted.** On the 82k system the CPU wins (1.48×): too small to feed the card
+   (F1 measured 19% SM-active on the L4). On the 351k system the GPU wins (1.20×):
+   now large enough to saturate it. Same workload class (membrane protein), opposite
+   answer — the discriminator is system size, not "GPU = fast." CIs disjoint in both
+   regimes, so both directions are real findings.
+
+2. **The GPU's win is NARROW (1.20×) once the CPU gets its best build — and that
+   changes the decision.** Against the CPU *floor* build (c8a AVX2, 33.79) the GPU
+   looks 1.47× faster; against the *tuned* CPU (c8a native AVX-512, 41.28 — the +23%
+   from F3) it is only 1.20×. At 1.20×, the GPU's premium and its **availability**
+   can tip the answer back to the CPU: in this run the L40S (g6e) was the *only* GPU
+   that launched — **g6 and g7e both returned `infeasible:capacity`** after retries.
+   `time/result = wait + runtime`: a 20% faster runtime you cannot get capacity for
+   loses to a CPU you can launch now. Reporting the GPU-vs-*floor* ratio would have
+   overstated the GPU by ~25% — the honest comparison is against the tuned CPU.
+
+3. **Moving PME off the GPU throws away the entire GPU advantage.** `gpu-cpu-pme`
+   (PME on CPU) measured 14.36 ± 0.20 ns/day on the L40S — *slower than every modern
+   CPU rung* (c8a 33.8, c8i 26.3, m9g 26.6) and 3.4× slower than `gpu-prod` on the
+   same card. On this system the PME offload *is* the GPU's value; a config that
+   keeps PME on the CPU should just use a CPU.
+
+**Conclusion.** "Get on the GPU" is wrong for small systems (F1) and right for large
+ones, with a measurable crossover between 82k and 351k atoms — but near the crossover
+the margin is small enough that CPU build quality, GPU price, and above all GPU
+*availability* decide the real time-to-result. The size of your system, the build you
+give the CPU, and whether the card even exists in the region are all part of the same
+decision. (D3)
+
+*If your system saturates the card, the GPU wins — but only ~1.2× on a mid-size
+membrane, so a tuned CPU you can actually launch may still be the better time/result.*
+
+**Data quality:** all cells 3-replicate mean±CI, CIs disjoint for every ranked pair.
+CPU medium is the floor build except the explicit `c8a-native` tuned cell (41.28);
+GPU is g6e (L40S) — g6/g7e recorded `infeasible:capacity`. benchMEM row is from F1.
+The `medium` tpr (`channel-medium.tpr`, 351k atoms, CHARMM36m) is the CHARMM-GUI build
+described in docs/divergence.md.
+
+---
+
 ## F3 — "Compile for the newest ISA" is wrong on 2 of 3 CPU vendors; the effect grows with generation, opposite signs (Phase 6)
 
 **System:** benchRIB (2M atoms). Three generational ladders — Intel c5→c8i, AMD
