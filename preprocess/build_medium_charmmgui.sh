@@ -72,8 +72,14 @@ NDX=(); [ -f index.ndx ] && NDX=(-n index.ndx)
 echo "== grompp BASE production tpr (CHARMM-GUI step7, 2 fs) =="
 "$GMX" grompp -f step7_production.mdp -o "${SYS}.tpr" -c "${prev}.gro" -t "${prev}.cpt" \
   -p topol.top "${NDX[@]}" -maxwarn 5
-ATOMS=$("$GMX" dump -s "${SYS}.tpr" 2>/dev/null | grep -m1 "natoms" | grep -oE '[0-9]+' | head -1)
-echo "== medium system: ${ATOMS} atoms =="
+# Atom count is cosmetic (matrix.yaml hardcodes it). Get it from `gmx check`,
+# whose output is a handful of lines, NOT `gmx dump -s` -- dump writes the WHOLE
+# 351k-atom topology+coords (100s of MB) to stdout, and when `grep -m1` exits
+# early gmx keeps writing to the closed pipe (ignores SIGPIPE) and HANGS forever.
+# That hang stalled two earlier builds right here, after grompp had already
+# succeeded. `|| true` so a parse miss can never block the upload of a good tpr.
+ATOMS=$("$GMX" check -s "${SYS}.tpr" 2>&1 | grep -m1 -iE "natoms|#atoms" | grep -oE '[0-9]+' | head -1 || true)
+echo "== medium system: ${ATOMS:-unknown} atoms =="
 
 # Upload the BASE tpr now, before the HMR step -- the base medium system is the
 # priority; HMR (D1) is a bonus. If ParmEd/HMR fails, we still keep the base.
